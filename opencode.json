@@ -1,0 +1,162 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "hm-recsys-orchestrator",
+  "instructions": [
+    ".opencode/instructions/project.md",
+    "docs/spec-driven-development.md",
+    "README.md"
+  ],
+  "share": "manual",
+  "autoupdate": "notify",
+  "snapshot": true,
+  "watcher": {
+    "ignore": [
+      ".git/**",
+      ".venv/**",
+      "venv/**",
+      "env/**",
+      "__pycache__/**",
+      ".pytest_cache/**",
+      ".ruff_cache/**",
+      ".mypy_cache/**",
+      ".ipynb_checkpoints/**",
+      "data/**",
+      "input/**",
+      "images/**",
+      "artifacts/**",
+      "models/**",
+      "outputs/**",
+      "submissions/**",
+      "wandb/**",
+      "mlruns/**",
+      "lightning_logs/**",
+      "*.csv",
+      "*.parquet",
+      "*.feather",
+      "*.arrow",
+      "*.pt",
+      "*.pth",
+      "*.ckpt",
+      "*.onnx",
+      "*.faiss",
+      "*.npy",
+      "*.npz"
+    ]
+  },
+  "permission": {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "edit": "ask",
+    "external_directory": "ask",
+    "webfetch": "ask",
+    "websearch": "ask",
+    "skill": "allow",
+    "task": "allow",
+    "doom_loop": "ask",
+    "bash": {
+      "*": "ask",
+      "ls*": "allow",
+      "pwd": "allow",
+      "find *": "allow",
+      "rg *": "allow",
+      "sed *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "wc *": "allow",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "python -m pytest*": "allow",
+      "python3 -m pytest*": "allow",
+      "pytest*": "allow",
+      "python -m compileall*": "allow",
+      "python3 -m compileall*": "allow",
+      "ruff*": "allow",
+      "mypy*": "allow",
+      "git push*": "ask",
+      "git reset*": "ask",
+      "git checkout*": "ask",
+      "rm *": "ask",
+      "kaggle *": "ask"
+    }
+  },
+  "tool_output": {
+    "max_lines": 1200,
+    "max_bytes": 60000
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "tail_turns": 3,
+    "reserved": 12000
+  },
+  "command": {
+    "repo-audit": {
+      "description": "Inspect repo state and propose the next safe implementation steps",
+      "agent": "hm-recsys-orchestrator",
+      "template": "Audit the current repository for the H&M personalized fashion recommendations project. Summarize implemented components, missing pieces, data assumptions, and the next highest-leverage tasks. Use the project instructions and available skills."
+    },
+    "data-contract": {
+      "description": "Check expected H&M input files, schemas, and leakage risks",
+      "agent": "data-auditor",
+      "subtask": true,
+      "template": "Review the expected H&M Kaggle data contract for this repo. Identify required files, expected columns, ID formatting, local path conventions, privacy/license constraints, and temporal leakage risks. Do not modify files unless explicitly asked."
+    },
+    "validation-design": {
+      "description": "Design or review temporal validation and MAP@12 evaluation",
+      "agent": "offline-evaluator",
+      "subtask": true,
+      "template": "Design or review the offline validation setup for predicting the 7-day period after the training window. Focus on temporal splits, candidate generation evaluation, MAP@12 correctness, and reproducibility."
+    },
+    "two-tower-plan": {
+      "description": "Plan the two-tower recommender architecture and training pipeline",
+      "agent": "two-tower-modeler",
+      "subtask": true,
+      "template": "Create a concrete implementation plan for the H&M two-tower recommender. Cover customer/item features, text/image metadata options, negatives, loss, retrieval, re-ranking hooks, validation, and submission generation."
+    },
+    "submission-check": {
+      "description": "Verify Kaggle submission format and ranking quality checks",
+      "agent": "kaggle-submission-checker",
+      "subtask": true,
+      "template": "Check the planned or generated H&M Kaggle submission workflow. Ensure every sample_submission customer_id receives up to 12 space-separated article_id predictions, article IDs preserve leading zeroes, duplicates are removed per customer, and no test-period leakage is used."
+    },
+    "review-ml": {
+      "description": "Review ML code changes for correctness, leakage, and reproducibility",
+      "agent": "ml-code-reviewer",
+      "subtask": true,
+      "template": "Review the current changes as an ML/recommender systems code reviewer. Prioritize correctness bugs, leakage, reproducibility gaps, expensive data operations, missing tests, and submission-format risks. Lead with findings and file references."
+    },
+    "sdd-audit": {
+      "description": "Create or review the spec-driven development plan for this H&M recommender",
+      "agent": "spec-architect",
+      "subtask": true,
+      "template": "Create a concise spec-driven development audit for the H&M recommender project. Cover outcomes, scope boundaries, constraints and assumptions, prior decisions, task breakdown, and verification criteria. Be skeptical about unproven assumptions and separate repo configuration from model implementation."
+    },
+    "candidate-plan": {
+      "description": "Design robust multi-source candidate generation for H&M recommendations",
+      "agent": "candidate-generation-specialist",
+      "subtask": true,
+      "template": "Design the candidate generation plan for the H&M recommendation pipeline. Include repeat purchase, recent popularity, customer segment popularity, item-item similarity, co-visitation, graph retrieval, two-tower retrieval, multimodal/content retrieval, backfill, recall metrics, and leakage controls."
+    },
+    "ranking-plan": {
+      "description": "Design ranking, blending, and ensembling for MAP@12",
+      "agent": "ranker-ensembler",
+      "subtask": true,
+      "template": "Design the ranking and ensembling plan for H&M recommendations. Cover feature families, LambdaMART/GBDT ranking, neural reranking options, calibration, diversity, duplicate handling, candidate-source features, blending strategy, ablations, and validation against MAP@12."
+    },
+    "experiment-plan": {
+      "description": "Design experiment tracking, ablations, and reproducibility controls",
+      "agent": "experiment-governor",
+      "subtask": true,
+      "template": "Create an experiment governance plan for the H&M recommender. Define run metadata, deterministic seeds, split registry, artifact naming, ablation protocol, comparison table, model cards, reproducibility checks, and promotion criteria."
+    },
+    "multimodal-plan": {
+      "description": "Design text/image/content embeddings for fashion recommendation",
+      "agent": "multimodal-fashion-specialist",
+      "subtask": true,
+      "template": "Design a multimodal feature and retrieval plan for H&M fashion recommendations. Cover article text embeddings, image embeddings, CLIP-style retrieval, dense content embeddings for cold-start robustness, dimensionality reduction, caching, leakage controls, and how these candidates blend with collaborative signals."
+    }
+  }
+}
