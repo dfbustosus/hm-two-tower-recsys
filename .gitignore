@@ -1,3 +1,6 @@
+# OS metadata
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -218,6 +221,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # H&M Kaggle data and generated ML artifacts
+h-and-m-personalized-fashion-recommendations/
 data/
 input/
 images/
@@ -228,6 +232,9 @@ submissions/
 wandb/
 mlruns/
 lightning_logs/
+bandit-report.*
+gitleaks-report.*
+pip-audit-report.*
 /articles.csv
 /customers.csv
 /sample_submission.csv
