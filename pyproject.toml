@@ -1,0 +1,69 @@
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+py_version = 311
+skip_gitignore = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "artifacts",
+    "data",
+    "env",
+    "models",
+    "outputs",
+    "submissions",
+    "venv",
+]
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "C4",
+    "DTZ",
+    "E",
+    "F",
+    "I",
+    "N",
+    "PIE",
+    "PT",
+    "RUF",
+    "SIM",
+    "UP",
+    "W",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = "^(data|artifacts|models|outputs|submissions|venv|env|\\.venv)/"
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.bandit]
+exclude_dirs = [
+    ".git",
+    ".venv",
+    "artifacts",
+    "data",
+    "env",
+    "models",
+    "outputs",
+    "submissions",
+    "venv",
+]
