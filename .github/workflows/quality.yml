@@ -1,0 +1,189 @@
+name: Quality
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-analysis:
+    name: Static analysis and repository hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Assert raw data and generated artifacts are not tracked
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+
+          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
+          forbidden_prefixes = (
+              "data/raw/",
+              "h-and-m-personalized-fashion-recommendations/",
+              "artifacts/",
+              "models/",
+              "outputs/",
+              "submissions/",
+          )
+          forbidden_root_files = {
+              "articles.csv",
+              "customers.csv",
+              "sample_submission.csv",
+              "transactions_train.csv",
+          }
+          forbidden_suffixes = (
+              ".arrow",
+              ".ckpt",
+              ".faiss",
+              ".feather",
+              ".jpeg",
+              ".jpg",
+              ".npy",
+              ".npz",
+              ".onnx",
+              ".parquet",
+              ".png",
+              ".pt",
+              ".pth",
+          )
+
+          violations = [
+              path
+              for path in tracked
+              if path in forbidden_root_files
+              or path.startswith(forbidden_prefixes)
+              or path.endswith(forbidden_suffixes)
+          ]
+
+          if violations:
+              print("Forbidden tracked data/artifact paths:")
+              for path in violations:
+                  print(f"- {path}")
+              sys.exit(1)
+
+          print("No forbidden raw data or generated artifact paths are tracked.")
+          PY
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Validate JSON configuration
+        run: python -m json.tool opencode.json > /tmp/opencode.json
+
+      - name: Lint GitHub workflow YAML
+        run: yamllint .github
+
+      - name: Detect Python files
+        id: python_files
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          ignored_parts = {
+              ".git",
+              ".mypy_cache",
+              ".pytest_cache",
+              ".ruff_cache",
+              ".venv",
+              "__pycache__",
+              "artifacts",
+              "data",
+              "env",
+              "models",
+              "node_modules",
+              "outputs",
+              "submissions",
+              "venv",
+          }
+          files = sorted(
+              str(path)
+              for path in Path(".").rglob("*.py")
+              if not any(part in ignored_parts for part in path.parts)
+          )
+          Path(".python-files").write_text("\n".join(files) + ("\n" if files else ""))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_python={'true' if files else 'false'}\n")
+
+          print(f"Detected {len(files)} Python file(s).")
+          for file_path in files:
+              print(file_path)
+          PY
+
+      - name: Ruff lint
+        if: steps.python_files.outputs.has_python == 'true'
+        run: ruff check .
+
+      - name: Black format check
+        if: steps.python_files.outputs.has_python == 'true'
+        run: black --check .
+
+      - name: isort import-order check
+        if: steps.python_files.outputs.has_python == 'true'
+        run: isort --check-only .
+
+      - name: Flake8 lint
+        if: steps.python_files.outputs.has_python == 'true'
+        run: flake8 .
+
+      - name: Mypy typing
+        if: steps.python_files.outputs.has_python == 'true'
+        run: |
+          python - <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          files = Path(".python-files").read_text(encoding="utf-8").splitlines()
+          raise SystemExit(subprocess.call([sys.executable, "-m", "mypy", *files]))
+          PY
+
+      - name: Detect pytest tests
+        id: pytest_tests
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          ignored_parts = {".git", ".venv", "data", "artifacts", "models", "outputs", "submissions"}
+          tests = sorted(
+              str(path)
+              for pattern in ("test_*.py", "*_test.py")
+              for path in Path(".").rglob(pattern)
+              if not any(part in ignored_parts for part in path.parts)
+          )
+          tests = sorted(set(tests))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_tests={'true' if tests else 'false'}\n")
+          print(f"Detected {len(tests)} pytest test file(s).")
+          PY
+
+      - name: Pytest
+        if: steps.pytest_tests.outputs.has_tests == 'true'
+        run: pytest
