@@ -1,0 +1,85 @@
+name: CodeQL
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect_python:
+    name: Detect Python source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      has_python: ${{ steps.detect.outputs.has_python }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Detect Python files
+        id: detect
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          ignored_parts = {
+              ".git",
+              ".venv",
+              "artifacts",
+              "data",
+              "env",
+              "models",
+              "node_modules",
+              "outputs",
+              "submissions",
+              "venv",
+          }
+          files = [
+              path
+              for path in Path(".").rglob("*.py")
+              if not any(part in ignored_parts for part in path.parts)
+          ]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_python={'true' if files else 'false'}\n")
+          print(f"CodeQL Python analysis enabled: {bool(files)}")
+          PY
+
+  analyze_python:
+    name: Analyze Python with CodeQL
+    needs: detect_python
+    if: needs.detect_python.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          queries: security-extended,security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:python
