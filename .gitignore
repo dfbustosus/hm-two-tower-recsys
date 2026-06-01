@@ -216,3 +216,29 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# H&M Kaggle data and generated ML artifacts
+data/
+input/
+images/
+artifacts/
+models/
+outputs/
+submissions/
+wandb/
+mlruns/
+lightning_logs/
+/articles.csv
+/customers.csv
+/sample_submission.csv
+/transactions_train.csv
+*.parquet
+*.feather
+*.arrow
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.faiss
