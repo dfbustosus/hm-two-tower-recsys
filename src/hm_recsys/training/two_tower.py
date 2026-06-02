@@ -1,3 +1,5 @@
+"""Configuration contracts for future two-tower retrieval experiments."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,7 +19,18 @@ ALLOWED_NEGATIVE_SAMPLING_STRATEGIES = frozenset(
 
 @dataclass(frozen=True)
 class TwoTowerTrainingConfig:
-    """Validated contract for future two-tower retrieval experiments."""
+    """Validated contract for future two-tower retrieval experiments.
+
+    Attributes:
+        embedding_dim: Shared latent dimension for customer and item towers.
+        negative_sampling: Negative sampling strategy used during training.
+        batch_size: Number of examples per training batch.
+        epochs: Number of training epochs.
+        seed: Non-negative random seed for reproducibility.
+        item_embedding_provider: Optional article embedding provider name.
+        image_embedding_provider: Optional image embedding provider name.
+        text_embedding_provider: Optional text embedding provider name.
+    """
 
     embedding_dim: int
     negative_sampling: NegativeSamplingStrategy
@@ -29,6 +42,13 @@ class TwoTowerTrainingConfig:
     text_embedding_provider: str | None = None
 
     def __post_init__(self) -> None:
+        """Validate numeric and categorical training configuration values.
+
+        Raises:
+            ValueError: If any numeric hyperparameter or sampling strategy is
+            invalid.
+        """
+
         if self.embedding_dim <= 0:
             raise ValueError("embedding_dim must be positive")
         if self.negative_sampling not in ALLOWED_NEGATIVE_SAMPLING_STRATEGIES:
