@@ -43,6 +43,12 @@ Retrieval baselines
 .. automodule:: hm_recsys.retrieval.baselines
    :members:
 
+Candidate diagnostics
+---------------------
+
+.. automodule:: hm_recsys.retrieval.candidate_diagnostics
+   :members:
+
 Embedding contracts
 -------------------
 
