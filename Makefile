@@ -4,6 +4,7 @@ PYTHON ?= python3
 VENV ?= .venv
 VENV_PYTHON := $(VENV)/bin/python
 VENV_PIP := $(VENV)/bin/pip
+VENV_KAGGLE := $(VENV)/bin/kaggle
 VENV_STAMP := $(VENV)/.requirements-dev.stamp
 EXCLUDED_SCAN_DIRS := .git,.venv,artifacts,data,env,models,outputs,submissions,venv
 
@@ -11,8 +12,11 @@ EXCLUDED_SCAN_DIRS := .git,.venv,artifacts,data,env,models,outputs,submissions,v
 
 BASELINE_LOOKBACK_DAYS ?= 7
 BASELINE_K ?= 12
+BASELINE_SUBMISSION ?= submissions/repeat_popularity_baseline_lookback_$(BASELINE_LOOKBACK_DAYS)_k_$(BASELINE_K).csv
+KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
+KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract temporal-split validate-submission baseline format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract temporal-split validate-submission baseline baseline-submission candidate-diagnostics kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -33,9 +37,12 @@ help:
 	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
 	@printf "Validation/submission:\n"
 	@printf "  make temporal-split CUTOFF=YYYY-MM-DD  Summarize a temporal split\n"
-	@printf "  make validate-submission SUBMISSION=path/to.csv  Validate a submission CSV\n\n"
+	@printf "  make validate-submission SUBMISSION=path/to.csv  Validate a submission CSV\n"
+	@printf "  make kaggle-submit SUBMISSION=path/to.csv  Submit a validated CSV to Kaggle\n\n"
 	@printf "Baselines:\n"
-	@printf "  make baseline CUTOFF=YYYY-MM-DD  Evaluate repeat+popularity baseline\n\n"
+	@printf "  make baseline CUTOFF=YYYY-MM-DD  Evaluate repeat+popularity baseline\n"
+	@printf "  make baseline-submission  Generate and validate repeat+popularity CSV\n"
+	@printf "  make candidate-diagnostics CUTOFF=YYYY-MM-DD  Evaluate candidate sources\n\n"
 	@printf "Maintenance:\n"
 	@printf "  make format        Auto-format Python files when present\n"
 	@printf "  make clean         Remove local caches, not data or the virtualenv\n"
@@ -117,6 +124,26 @@ validate-submission: venv
 baseline: venv
 	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make baseline CUTOFF=2020-09-16\n"; exit 2; fi
 	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(BASELINE_K)"
+
+baseline-submission: venv
+	"$(VENV_PYTHON)" -m hm_recsys.cli generate-baseline-submission --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(BASELINE_K)" --output-path "$(BASELINE_SUBMISSION)"
+
+candidate-diagnostics: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make candidate-diagnostics CUTOFF=2020-09-16\n"; exit 2; fi
+	"$(VENV_PYTHON)" -m hm_recsys.cli candidate-diagnostics --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --evaluation-ks 12 50 100
+
+kaggle-submit: venv
+	@if [[ -z "$(SUBMISSION)" ]]; then printf "SUBMISSION is required, e.g. make kaggle-submit SUBMISSION=submissions/file.csv\n"; exit 2; fi
+	"$(VENV_PYTHON)" -m hm_recsys.cli validate-submission --submission-path "$(SUBMISSION)"
+	@if [[ ! -x "$(VENV_KAGGLE)" ]]; then printf "kaggle CLI not found in $(VENV). Run make venv to install pinned development tools.\n"; exit 127; fi; \
+	if [[ -f ".env" ]]; then set -a; source ".env"; set +a; fi; \
+	username="$${KAGGLE_USERNAME:-$${KAGGLE_USER_NAME:-}}"; \
+	key="$${KAGGLE_KEY:-$${KAGGLE_API_TOKEN:-}}"; \
+	if [[ -z "$$username" || -z "$$key" ]]; then \
+		printf "Kaggle credentials are missing. Set KAGGLE_USERNAME/KAGGLE_KEY or KAGGLE_USER_NAME/KAGGLE_API_TOKEN.\n"; \
+		exit 2; \
+	fi; \
+	KAGGLE_USERNAME="$$username" KAGGLE_KEY="$$key" "$(VENV_KAGGLE)" competitions submit -c "$(KAGGLE_COMPETITION)" -f "$(SUBMISSION)" -m "$(KAGGLE_MESSAGE)"
 
 format: venv
 	"$(VENV)/bin/black" .
