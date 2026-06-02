@@ -27,7 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Assert raw data and generated artifacts are not tracked
-        run: python scripts/check_repo_hygiene.py
+        run: PYTHONPATH=src python -m hm_recsys.tools.check_repo_hygiene
 
       - name: Set up Python
         uses: actions/setup-python@v6
