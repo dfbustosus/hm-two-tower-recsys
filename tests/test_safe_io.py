@@ -11,6 +11,7 @@ from hm_recsys.data.io import (
     iter_transaction_events,
     iter_transactions,
     load_article_ids,
+    load_submission_customer_ids_in_order,
 )
 
 CUSTOMER_ID = "a" * 64
@@ -75,6 +76,22 @@ def test_load_article_ids_preserves_leading_zeroes(tmp_path: Path) -> None:
     write_csv(raw_dir / "articles.csv", ["article_id"], [{"article_id": ARTICLE_ID}])
 
     assert load_article_ids(raw_dir) == {ARTICLE_ID}
+
+
+def test_load_submission_customer_ids_in_order_rejects_duplicates(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    write_csv(
+        raw_dir / "sample_submission.csv",
+        ["customer_id", "prediction"],
+        [
+            {"customer_id": CUSTOMER_ID, "prediction": ARTICLE_ID},
+            {"customer_id": CUSTOMER_ID, "prediction": ARTICLE_ID},
+        ],
+    )
+
+    with pytest.raises(CsvValueError, match="duplicate customer_id"):
+        load_submission_customer_ids_in_order(raw_dir)
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
