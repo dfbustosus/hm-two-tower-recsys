@@ -6,11 +6,13 @@ This repository uses Dependabot to keep automation and Python development toolin
 
 - Python version target: `3.11`, recorded in `.python-version` and CI workflows.
 - Local environment: `.venv/`, created with `make venv`, ignored by git.
+- Package layout: installable `src/` package configured in `pyproject.toml`.
+- Runtime dependencies: currently empty because the Stage 1 validator uses the Python standard library.
 - Development tooling: exact pins in `requirements-dev.txt`.
 - Tool configuration: `pyproject.toml`, `.flake8`, and `.yamllint`.
 - Command surface: `Makefile` targets such as `make check`, `make lint`, `make security`, and `make test`.
 
-The repository is not using Poetry at this stage because there is not yet a production Python package or runtime dependency graph. Introducing Poetry now would create ceremony without solving an actual packaging problem. Re-evaluate Poetry, uv, or another lockfile-based manager when Stage 1 creates importable package code and runtime dependencies.
+The repository is not using Poetry at this stage because there is not yet a runtime dependency graph. Introducing Poetry now would create ceremony without solving an actual packaging problem. Re-evaluate Poetry, uv, or another lockfile-based manager when runtime dependencies and packaging needs become more complex.
 
 ## What Dependabot Monitors
 
