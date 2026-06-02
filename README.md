@@ -6,7 +6,13 @@ The immediate goal is not to jump directly to a two-tower model. The repository 
 
 ## Current project layer
 
-This repo is in the foundation implementation layer. Governance, artifact policy, CI, and the initial `src/` package layout are in place. Production foundation components now cover H&M data-contract validation, safe string-ID CSV loading, temporal split summaries, MAP@12/recall metrics, and submission validation. Recommender models should still come only after these checks pass and baseline acceptance criteria are explicit.
+This repo is in the ranking baseline implementation layer. Governance, artifact
+policy, CI, and the layered `src/` package layout are in place. Production
+components now cover H&M data-contract validation, safe string-ID CSV loading,
+temporal split summaries, MAP@12/recall metrics, submission validation,
+repeat-plus-popularity baselines, candidate-source diagnostics, co-visitation
+retrieval, ranker-ready candidate exports, deterministic ranking, learned linear
+ranking, and rolling-window ranker validation.
 
 ## Project structure
 
@@ -15,6 +21,7 @@ This repo is in the foundation implementation layer. Governance, artifact policy
   - `data/`: data contracts and safe CSV/string-ID loading.
   - `evaluation/`: temporal splits, MAP@12/recall metrics, and submission validation.
   - `retrieval/`: candidate generation and retrieval baselines.
+  - `ranking/`: deterministic, learned linear, and rolling-window ranker evaluation.
   - `embeddings/`: provider contracts and factories for text, image, and multimodal embeddings.
   - `indexing/`: vector-index contracts and factories for retrieval pipelines.
   - `training/`: training configuration contracts, including two-tower retrieval.
@@ -177,8 +184,8 @@ Evaluate baseline candidate sources before adding more complex retrieval:
 make candidate-diagnostics CUTOFF=2020-09-16
 ```
 
-This compares repeat-only, recent popularity, all-time popularity, and the
-repeat-plus-popularity blend with MAP@12, recall@12/50/100, candidate coverage,
+This compares repeat-only, recent popularity, all-time popularity, co-visitation,
+and deterministic blends with MAP@12, recall@12/50/100, candidate coverage,
 article coverage, duplicate rows, candidate-count distributions, and customer
 history slices. Reports are written under:
 
@@ -186,7 +193,101 @@ history slices. Reports are written under:
 artifacts/candidate-diagnostics/
 ```
 
+Export ranker-ready candidate rows for validation-label customers:
+
+```bash
+make candidate-export CUTOFF=2020-09-16
+```
+
+For a bounded smoke export, cap the deterministic target customer count:
+
+```bash
+make candidate-export CUTOFF=2020-09-16 CANDIDATE_EXPORT_MAX_CUSTOMERS=1000
+```
+
+The CSV schema is:
+
+```text
+customer_id,article_id,source,source_rank,source_score
+```
+
+Exports are written under ignored local artifacts:
+
+```text
+artifacts/candidate-exports/
+```
+
+Evaluate the first transparent deterministic ranker baseline:
+
+```bash
+make ranker-baseline CUTOFF=2020-09-16
+```
+
+For a bounded smoke evaluation:
+
+```bash
+make ranker-baseline CUTOFF=2020-09-16 RANKER_MAX_TARGET_CUSTOMERS=1000
+```
+
+The ranker aggregates multiple source rows per `(customer_id, article_id)` into
+source-indicator, source-rank, and source-score features, then compares MAP@12
+against the same-scope repeat→recent-popularity→all-time-popularity baseline.
+Reports are written under:
+
+```text
+artifacts/ranker-baselines/
+```
+
+Train a leakage-safe learned linear ranker on the previous 7-day window and
+evaluate it on the requested validation cutoff:
+
+```bash
+make learned-ranker-baseline CUTOFF=2020-09-16
+```
+
+For a bounded smoke evaluation:
+
+```bash
+make learned-ranker-baseline CUTOFF=2020-09-16 LEARNED_RANKER_MAX_TARGET_CUSTOMERS=1000
+```
+
+By default, `CUTOFF=2020-09-16` trains on labels from `2020-09-09` through
+`2020-09-16` exclusive, then evaluates on labels from `2020-09-16` through
+`2020-09-23` exclusive. This avoids fitting on the same labels used for the
+reported MAP@12.
+
+Validate ranker improvements across rolling temporal windows before promotion:
+
+```bash
+make rolling-ranker-validation
+```
+
+The default rolling cutoffs are `2020-09-02`, `2020-09-09`, and `2020-09-16`.
+Each window trains the learned linear ranker on the previous non-overlapping
+7-day label window, evaluates on the requested cutoff, and reports source-order,
+deterministic-ranker, and learned-ranker MAP@12/recall side by side.
+
+For a bounded smoke run:
+
+```bash
+make rolling-ranker-validation ROLLING_RANKER_MAX_TARGET_CUSTOMERS=1000
+```
+
+To override the evaluated windows:
+
+```bash
+make rolling-ranker-validation \
+  ROLLING_RANKER_CUTOFFS="2020-09-02 2020-09-09 2020-09-16"
+```
+
+Reports are written under:
+
+```text
+artifacts/ranker-baselines/
+```
+
 ## Next implementation gate
 
-The next code milestone is co-visitation candidate generation measured against
-the candidate diagnostics report before adding a ranker or two-tower retrieval.
+The next code milestone is a two-tower retrieval challenger that must improve
+candidate recall or downstream MAP@12 after comparison with the deterministic
+and learned ranker baselines.
