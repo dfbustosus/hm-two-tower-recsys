@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,62 @@ from typing import Any
 from hm_recsys.core.ids import is_article_id, is_customer_id
 
 EXPECTED_SUBMISSION_HEADER = ("customer_id", "prediction")
+
+
+def write_submission_file(
+    predictions_by_customer: Mapping[str, Iterable[str]],
+    customer_ids: Iterable[str],
+    path: Path | str,
+    max_predictions: int = 12,
+) -> Path:
+    """Write a Kaggle-style H&M submission CSV.
+
+    Args:
+        predictions_by_customer: Ranked article IDs keyed by customer ID.
+        customer_ids: Authoritative customer order, usually from
+            ``sample_submission.csv``.
+        path: Destination CSV path.
+        max_predictions: Maximum number of predictions allowed per row.
+
+    Returns:
+        Resolved path written to disk.
+
+    Raises:
+        ValueError: If identifiers are malformed, predictions are missing,
+        duplicate article IDs appear in a row, or a row exceeds
+        ``max_predictions``.
+    """
+
+    if max_predictions <= 0:
+        raise ValueError("max_predictions must be positive")
+
+    submission_path = Path(path).expanduser().resolve()
+    submission_path.parent.mkdir(parents=True, exist_ok=True)
+    with submission_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(EXPECTED_SUBMISSION_HEADER)
+        for customer_id in customer_ids:
+            if not is_customer_id(customer_id):
+                raise ValueError(f"invalid customer_id: {customer_id!r}")
+            if customer_id not in predictions_by_customer:
+                raise ValueError(f"missing predictions for customer_id: {customer_id!r}")
+
+            predictions = tuple(predictions_by_customer[customer_id])
+            if len(predictions) > max_predictions:
+                raise ValueError(
+                    f"customer_id {customer_id!r} has more than {max_predictions} predictions"
+                )
+            if len(set(predictions)) != len(predictions):
+                raise ValueError(f"customer_id {customer_id!r} has duplicate predictions")
+            invalid_articles = [
+                article_id for article_id in predictions if not is_article_id(article_id)
+            ]
+            if invalid_articles:
+                raise ValueError(
+                    f"customer_id {customer_id!r} has invalid article_id {invalid_articles[0]!r}"
+                )
+            writer.writerow((customer_id, " ".join(predictions)))
+    return submission_path
 
 
 @dataclass(frozen=True)
