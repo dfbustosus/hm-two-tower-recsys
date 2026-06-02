@@ -1,3 +1,5 @@
+"""Temporal validation splitting and label collection utilities."""
+
 from __future__ import annotations
 
 import json
@@ -15,26 +17,59 @@ SplitBucket = Literal["train", "validation", "future"]
 
 @dataclass(frozen=True)
 class TemporalSplit:
-    """Cutoff-based next-window split for H&M-style recommendation validation."""
+    """Cutoff-based next-window split for H&M-style validation.
+
+    Attributes:
+        cutoff: First date included in the validation target window.
+        horizon_days: Number of days in the validation target window.
+    """
 
     cutoff: date
     horizon_days: int = 7
 
     def __post_init__(self) -> None:
+        """Validate split parameters after dataclass initialization.
+
+        Raises:
+            ValueError: If ``horizon_days`` is not positive.
+        """
+
         if self.horizon_days <= 0:
             raise ValueError("horizon_days must be positive")
 
     @classmethod
     def from_isoformat(cls, cutoff: str, horizon_days: int = 7) -> TemporalSplit:
+        """Create a split from an ISO ``YYYY-MM-DD`` cutoff string.
+
+        Args:
+            cutoff: Validation start date as an ISO date string.
+            horizon_days: Number of days in the validation window.
+
+        Returns:
+            Parsed ``TemporalSplit`` instance.
+        """
+
         return cls(cutoff=date.fromisoformat(cutoff), horizon_days=horizon_days)
 
     @property
     def validation_end(self) -> date:
+        """Return the exclusive validation-window end date.
+
+        Returns:
+            ``cutoff + horizon_days`` as a ``date``.
+        """
+
         return self.cutoff + timedelta(days=self.horizon_days)
 
 
 @dataclass(frozen=True)
 class TemporalSplitSummary:
+    """Aggregate row, customer, article, and label counts for a split.
+
+    Attributes mirror the serialized JSON report emitted by the temporal split
+    CLI command.
+    """
+
     cutoff: str
     validation_start: str
     validation_end_exclusive: str
@@ -54,11 +89,30 @@ class TemporalSplitSummary:
 
 @dataclass(frozen=True)
 class TemporalValidationData:
+    """Temporal split summary plus validation labels.
+
+    Attributes:
+        summary: Aggregate counts for train, validation, and future buckets.
+        validation_labels: Mapping of customer ID to unique validation articles in
+            first-seen order.
+    """
+
     summary: TemporalSplitSummary
     validation_labels: dict[str, tuple[str, ...]]
 
 
 def assign_split_bucket(transaction_date: date, split: TemporalSplit) -> SplitBucket:
+    """Assign a transaction date to train, validation, or future.
+
+    Args:
+        transaction_date: Purchase date to classify.
+        split: Cutoff and horizon definition.
+
+    Returns:
+        ``"train"`` for dates before cutoff, ``"validation"`` for dates in the
+        target window, and ``"future"`` for dates after the target window.
+    """
+
     if transaction_date < split.cutoff:
         return "train"
     if transaction_date < split.validation_end:
@@ -69,12 +123,32 @@ def assign_split_bucket(transaction_date: date, split: TemporalSplit) -> SplitBu
 def summarize_temporal_split(
     transactions: Iterable[TransactionEvent], split: TemporalSplit
 ) -> TemporalSplitSummary:
+    """Summarize a temporal split without returning labels.
+
+    Args:
+        transactions: Transaction events to bucket by date.
+        split: Cutoff and horizon definition.
+
+    Returns:
+        Aggregate split summary.
+    """
+
     return summarize_temporal_split_with_labels(transactions, split).summary
 
 
 def summarize_temporal_split_with_labels(
     transactions: Iterable[TransactionEvent], split: TemporalSplit
 ) -> TemporalValidationData:
+    """Summarize a split and collect unique validation target labels.
+
+    Args:
+        transactions: Transaction events to bucket by date.
+        split: Cutoff and horizon definition.
+
+    Returns:
+        Split summary plus customer-to-article validation labels.
+    """
+
     row_counts = {"train": 0, "validation": 0, "future": 0}
     customers: dict[SplitBucket, set[str]] = {
         "train": set(),
@@ -128,15 +202,44 @@ def summarize_temporal_split_with_labels(
 def collect_validation_labels(
     transactions: Iterable[TransactionEvent], split: TemporalSplit
 ) -> dict[str, tuple[str, ...]]:
-    """Collect unique validation target articles per customer in first-seen order."""
+    """Collect unique validation target articles per customer.
+
+    Args:
+        transactions: Transaction events to bucket by date.
+        split: Cutoff and horizon definition.
+
+    Returns:
+        Mapping of customer ID to unique validation article IDs in first-seen
+        order.
+    """
+
     return summarize_temporal_split_with_labels(transactions, split).validation_labels
 
 
 def temporal_split_summary_to_dict(summary: TemporalSplitSummary) -> dict[str, int | str]:
+    """Convert a temporal split summary to JSON-serializable primitives.
+
+    Args:
+        summary: Summary object to convert.
+
+    Returns:
+        Dictionary suitable for ``json.dumps``.
+    """
+
     return asdict(summary)
 
 
 def write_temporal_split_summary(summary: TemporalSplitSummary, path: Path | str) -> Path:
+    """Write a temporal split summary as deterministic JSON.
+
+    Args:
+        summary: Summary object to serialize.
+        path: Destination JSON path.
+
+    Returns:
+        Resolved path written to disk.
+    """
+
     report_path = Path(path).expanduser().resolve()
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
@@ -149,7 +252,16 @@ def write_temporal_split_summary(summary: TemporalSplitSummary, path: Path | str
 def assert_no_validation_leakage(
     train_features: Mapping[str, object], split: TemporalSplit
 ) -> None:
-    """Guard for future feature builders that record their cutoff metadata."""
+    """Guard feature metadata against validation leakage.
+
+    Args:
+        train_features: Feature metadata expected to contain a ``cutoff`` key.
+        split: Temporal split whose cutoff must match the metadata.
+
+    Raises:
+        ValueError: If metadata lacks a cutoff or records the wrong cutoff.
+    """
+
     cutoff = train_features.get("cutoff")
     if cutoff is None:
         raise ValueError("train_features metadata must include a cutoff")
