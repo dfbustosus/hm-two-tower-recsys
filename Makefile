@@ -9,7 +9,7 @@ EXCLUDED_SCAN_DIRS := .git,.venv,artifacts,data,env,models,outputs,submissions,v
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install-dev check validate lint type test security audit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit data-contract temporal-split validate-submission format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -24,6 +24,11 @@ help:
 	@printf "  make test          Run pytest when tests exist\n"
 	@printf "  make security      Run pip-audit and Bandit when Python files exist\n"
 	@printf "  make audit         Check tracked files for forbidden data/artifacts\n\n"
+	@printf "Data:\n"
+	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
+	@printf "Validation/submission:\n"
+	@printf "  make temporal-split CUTOFF=YYYY-MM-DD  Summarize a temporal split\n"
+	@printf "  make validate-submission SUBMISSION=path/to.csv  Validate a submission CSV\n\n"
 	@printf "Maintenance:\n"
 	@printf "  make format        Auto-format Python files when present\n"
 	@printf "  make clean         Remove local caches, not data or the virtualenv\n"
@@ -33,8 +38,9 @@ $(VENV_PYTHON):
 	$(PYTHON) -m venv "$(VENV)"
 	"$(VENV_PYTHON)" -m pip install --upgrade pip
 
-$(VENV_STAMP): requirements-dev.txt $(VENV_PYTHON)
+$(VENV_STAMP): requirements-dev.txt pyproject.toml $(VENV_PYTHON)
 	"$(VENV_PIP)" install -r requirements-dev.txt
+	"$(VENV_PIP)" install -e .
 	@touch "$(VENV_STAMP)"
 
 venv: $(VENV_STAMP)
@@ -83,13 +89,24 @@ security: venv
 		printf "No Python files detected; skipping Bandit.\n"; \
 	fi
 
+data-contract: venv
+	"$(VENV_PYTHON)" -m hm_recsys.cli validate-data-contract
+
+temporal-split: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make temporal-split CUTOFF=2020-09-16\n"; exit 2; fi
+	"$(VENV_PYTHON)" -m hm_recsys.cli summarize-temporal-split --cutoff "$(CUTOFF)"
+
+validate-submission: venv
+	@if [[ -z "$(SUBMISSION)" ]]; then printf "SUBMISSION is required, e.g. make validate-submission SUBMISSION=submissions/file.csv\n"; exit 2; fi
+	"$(VENV_PYTHON)" -m hm_recsys.cli validate-submission --submission-path "$(SUBMISSION)"
+
 format: venv
 	"$(VENV)/bin/black" .
 	"$(VENV)/bin/isort" .
 	"$(VENV)/bin/ruff" check . --fix
 
 clean:
-	rm -rf .mypy_cache .pytest_cache .ruff_cache .python-files htmlcov .coverage .coverage.*
+	rm -rf .mypy_cache .pytest_cache .ruff_cache .python-files htmlcov .coverage .coverage.* src/*.egg-info
 	find . \( -path './.git' -o -path './.venv' -o -path './artifacts' -o -path './data' -o -path './models' -o -path './outputs' -o -path './submissions' \) -prune -o -type d -name __pycache__ -exec rm -rf {} +
 
 clean-venv:
