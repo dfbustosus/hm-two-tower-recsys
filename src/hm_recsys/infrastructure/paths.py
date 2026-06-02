@@ -153,6 +153,40 @@ class ProjectPaths:
         name = f"repeat_popularity_cutoff_{_safe_name(cutoff)}_lookback_{lookback_days}_k_{k}.json"
         return self.artifacts_dir / "baselines" / name
 
+    def baseline_submission_path(self, lookback_days: int, k: int) -> Path:
+        """Return the default repeat-plus-popularity submission CSV path.
+
+        Args:
+            lookback_days: Recent popularity window length.
+            k: Recommendation list length.
+
+        Returns:
+            Path under ``submissions/``.
+        """
+
+        name = f"repeat_popularity_baseline_lookback_{lookback_days}_k_{k}.csv"
+        return self.submissions_dir / name
+
+    def candidate_diagnostics_report_path(
+        self, cutoff: str, lookback_days: int, max_k: int
+    ) -> Path:
+        """Return the default candidate diagnostics report path.
+
+        Args:
+            cutoff: Validation cutoff date string.
+            lookback_days: Recent popularity window length.
+            max_k: Maximum candidate depth evaluated.
+
+        Returns:
+            Path under ``artifacts/candidate-diagnostics/``.
+        """
+
+        name = (
+            f"candidate_diagnostics_cutoff_{_safe_name(cutoff)}_"
+            f"lookback_{lookback_days}_max_k_{max_k}.json"
+        )
+        return self.artifacts_dir / "candidate-diagnostics" / name
+
 
 def _safe_name(value: str) -> str:
     """Return a filesystem-safe name derived from an arbitrary string."""
