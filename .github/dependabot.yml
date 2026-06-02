@@ -38,3 +38,23 @@ updates:
       python-dev-tooling:
         patterns:
           - "*"
+
+  - package-ecosystem: pip
+    directory: /docs
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:45"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - python
+      - docs
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      python-docs-tooling:
+        patterns:
+          - "*"
