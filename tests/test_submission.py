@@ -1,7 +1,7 @@
 import csv
 from pathlib import Path
 
-from hm_recsys.submission import validate_submission_file
+from hm_recsys.evaluation.submission import validate_submission_file
 
 CUSTOMER_ID = "a" * 64
 SECOND_CUSTOMER_ID = "b" * 64
