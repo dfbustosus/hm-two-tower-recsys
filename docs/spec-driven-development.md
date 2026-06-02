@@ -2,7 +2,7 @@
 
 ## Current Project Layer
 
-The repository is in the **foundation implementation** layer. Governance and CI are in place, and production code now uses a layered `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, submission validation, and a repeat-plus-popularity baseline. The package now has explicit contracts for embeddings, indexing, and two-tower training so advanced retrieval can be added without turning the package into a monolith. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
+The repository is in the **candidate diagnostics implementation** layer. Governance and CI are in place, and production code now uses a layered `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, submission validation, repeat-plus-popularity baseline evaluation/submission generation, and baseline candidate-source diagnostics. The package now has explicit contracts for embeddings, indexing, and two-tower training so advanced retrieval can be added without turning the package into a monolith. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
 
 ## Architectural Posture
 
@@ -22,6 +22,7 @@ The implementation should keep dataset-specific parsing separate from reusable r
 - **Temporal splitter:** creates cutoff-based train and target windows with auditable row counts.
 - **Metric evaluator:** computes MAP@12 and recall@K with deterministic duplicate handling.
 - **Candidate generator:** emits `(customer_id, article_id, source, source_rank, source_score)` records.
+- **Candidate diagnostics:** evaluates source-specific and blended candidate recall, coverage, duplicate rate, count distributions, and history slices before ranking.
 - **Feature builder:** joins cutoff-safe customer, article, interaction, time, and source features.
 - **Ranker:** consumes candidates/features and emits ordered article lists per customer.
 - **Submission validator:** checks final CSV shape, customer universe, ID validity, duplicate predictions, and max-12 length.
@@ -92,6 +93,8 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Offline validation must be temporal. Training features, popularity windows, candidate sources, negative sampling, and ranker labels must not use validation target rows.
 - The default temporal split convention is `train.t_dat < cutoff` and `validation.t_dat >= cutoff` with `validation.t_dat < cutoff + 7 days`, using dates parsed from `t_dat` without timezone assumptions.
 - Offline MAP@12 should be computed on validation customers with at least one target purchase, matching Kaggle's exclusion of customers with no purchases in the scoring period.
+- Baseline and challenger evaluators should still generate predictions for the full `sample_submission.csv` customer universe, then compute offline MAP@12 on the labeled subset with validation purchases.
+- Submission upload commands must validate the CSV first and must not print Kaggle credentials or commit generated submission files.
 - Duplicate transaction rows can represent multiple purchases and must not be silently deduplicated unless the component contract explicitly requires unique items.
 - Raw data and generated artifacts stay outside git.
 - Runs must be reproducible for a fixed split, seed, config, and source version.
@@ -166,6 +169,8 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Blend baseline sources with deterministic tie-breaking and popularity backfill to 12 items.
 - Report MAP@12, recall, coverage, duplicate rate, and runtime.
 - Expose the first blended repeat-plus-popularity baseline through `make baseline CUTOFF=YYYY-MM-DD`; write reports under ignored `artifacts/baselines/`.
+- Expose final-data repeat-plus-popularity CSV generation through `make baseline-submission`; write generated files under ignored `submissions/` and validate them before any upload.
+- Expose baseline candidate-source diagnostics through `make candidate-diagnostics CUTOFF=YYYY-MM-DD`; write reports under ignored `artifacts/candidate-diagnostics/`.
 
 ### Stage 5: Candidate generation diagnostics
 
