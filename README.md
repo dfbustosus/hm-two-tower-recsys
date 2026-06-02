@@ -127,11 +127,43 @@ Validate a generated Kaggle submission when one exists:
 make validate-submission SUBMISSION=submissions/example.csv
 ```
 
+Generate and validate a full repeat-plus-popularity baseline submission:
+
+```bash
+make baseline-submission
+```
+
+This writes an ignored CSV under:
+
+```text
+submissions/
+```
+
+Submit a locally validated CSV to Kaggle when you intentionally want to use a
+submission slot:
+
+```bash
+make kaggle-submit \
+  SUBMISSION=submissions/repeat_popularity_baseline_lookback_7_k_12.csv \
+  KAGGLE_MESSAGE="repeat popularity baseline smoke test"
+```
+
+The submit target validates the CSV before upload and supports either Kaggle's
+standard `KAGGLE_USERNAME`/`KAGGLE_KEY` variables or this repo's local
+`KAGGLE_USER_NAME`/`KAGGLE_API_TOKEN` names from `.env`. It does not print the
+credential values.
+
 Evaluate the first leakage-safe baseline on a temporal split:
 
 ```bash
 make baseline CUTOFF=2020-09-16
 ```
+
+The baseline command generates predictions for every customer in
+`sample_submission.csv` and reports full-length coverage for that full target
+universe. Offline MAP@12 and recall@12 are computed only on target-universe
+customers with purchases in the validation window, matching Kaggle's scoring
+behavior.
 
 This evaluates repeat purchases plus recent global popularity with deterministic backfill to 12 and writes an ignored report under:
 
@@ -139,6 +171,22 @@ This evaluates repeat purchases plus recent global popularity with deterministic
 artifacts/baselines/
 ```
 
+Evaluate baseline candidate sources before adding more complex retrieval:
+
+```bash
+make candidate-diagnostics CUTOFF=2020-09-16
+```
+
+This compares repeat-only, recent popularity, all-time popularity, and the
+repeat-plus-popularity blend with MAP@12, recall@12/50/100, candidate coverage,
+article coverage, duplicate rows, candidate-count distributions, and customer
+history slices. Reports are written under:
+
+```text
+artifacts/candidate-diagnostics/
+```
+
 ## Next implementation gate
 
-The next code milestone is baseline candidate diagnostics: source-specific recall, candidate count distributions, sparse-user slices, and comparison of repeat-only, popularity-only, and blended variants before adding co-visitation.
+The next code milestone is co-visitation candidate generation measured against
+the candidate diagnostics report before adding a ranker or two-tower retrieval.
