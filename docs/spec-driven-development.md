@@ -2,7 +2,7 @@
 
 ## Current Project Layer
 
-The repository is in the **foundation implementation** layer. Governance and CI are in place, and production code now uses a standard `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, and submission validation. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
+The repository is in the **foundation implementation** layer. Governance and CI are in place, and production code now uses a layered `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, submission validation, and a repeat-plus-popularity baseline. The package now has explicit contracts for embeddings, indexing, and two-tower training so advanced retrieval can be added without turning the package into a monolith. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
 
 ## Architectural Posture
 
@@ -118,7 +118,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Checkpoints, embeddings, and indexes belong under `models/`.
 - Generated Kaggle files belong under `submissions/`.
 - Production logic should live in importable modules once implementation begins; notebooks may explore but must not become the only source of truth.
-- Production logic uses the `src/hm_recsys/` package layout with synthetic tests under `tests/`.
+- Production logic uses the layered `src/hm_recsys/` package layout with synthetic tests under `tests/`.
 - Ranking is a first-class stage. Retrieval scores alone are not assumed sufficient.
 - Submission validation is a hard gate before any CSV is considered usable.
 
@@ -165,6 +165,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Build customer-segment popularity using safe pre-cutoff customer/article metadata.
 - Blend baseline sources with deterministic tie-breaking and popularity backfill to 12 items.
 - Report MAP@12, recall, coverage, duplicate rate, and runtime.
+- Expose the first blended repeat-plus-popularity baseline through `make baseline CUTOFF=YYYY-MM-DD`; write reports under ignored `artifacts/baselines/`.
 
 ### Stage 5: Candidate generation diagnostics
 
