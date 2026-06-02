@@ -1,7 +1,7 @@
 from datetime import date
 
-from hm_recsys.safe_io import TransactionEvent
-from hm_recsys.temporal import (
+from hm_recsys.data.io import TransactionEvent
+from hm_recsys.evaluation.temporal import (
     TemporalSplit,
     assign_split_bucket,
     collect_validation_labels,
