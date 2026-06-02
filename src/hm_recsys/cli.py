@@ -1,3 +1,5 @@
+"""Command-line interface for H&M recommender validation utilities."""
+
 from __future__ import annotations
 
 import argparse
@@ -27,6 +29,12 @@ from hm_recsys.retrieval.baselines import (
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the top-level ``hm-recsys`` argument parser.
+
+    Returns:
+        Configured ``ArgumentParser`` with all supported subcommands.
+    """
+
     parser = argparse.ArgumentParser(prog="hm-recsys")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -106,12 +114,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command-line interface.
+
+    Args:
+        argv: Optional argument vector. Defaults to ``sys.argv`` when ``None``.
+
+    Returns:
+        Process exit code from the selected command handler.
+    """
+
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.handler(args))
 
 
 def _handle_validate_data_contract(args: argparse.Namespace) -> int:
+    """Handle the ``validate-data-contract`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` when the data contract is valid; otherwise ``1``.
+    """
+
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     report_path = _resolve_report_path(paths, args.report_path)
     report = validate_hm_data_contract(paths.raw_data_dir)
@@ -131,6 +157,15 @@ def _handle_validate_data_contract(args: argparse.Namespace) -> int:
 
 
 def _handle_summarize_temporal_split(args: argparse.Namespace) -> int:
+    """Handle the ``summarize-temporal-split`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` after writing the temporal split report.
+    """
+
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     report_path = args.report_path or paths.temporal_split_report_path(args.cutoff)
@@ -150,6 +185,15 @@ def _handle_summarize_temporal_split(args: argparse.Namespace) -> int:
 
 
 def _handle_validate_submission(args: argparse.Namespace) -> int:
+    """Handle the ``validate-submission`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` when the submission is valid; otherwise ``1``.
+    """
+
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     report_path = args.report_path or paths.submission_validation_report_path(args.submission_path)
     if not report_path.is_absolute():
@@ -172,6 +216,15 @@ def _handle_validate_submission(args: argparse.Namespace) -> int:
 
 
 def _handle_evaluate_baseline(args: argparse.Namespace) -> int:
+    """Handle the ``evaluate-baseline`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` after evaluating the baseline and writing its report.
+    """
+
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     report_path = args.report_path or paths.baseline_report_path(
@@ -205,6 +258,17 @@ def _handle_evaluate_baseline(args: argparse.Namespace) -> int:
 
 
 def _resolve_report_path(paths: ProjectPaths, report_path: Path | None) -> Path:
+    """Resolve an optional report path against project paths.
+
+    Args:
+        paths: Canonical project paths.
+        report_path: Optional CLI-provided report path.
+
+    Returns:
+        Absolute report path. Defaults to the data-contract report path when no
+        override is provided.
+    """
+
     if report_path is None:
         return paths.data_contract_report_path
     expanded = report_path.expanduser()
