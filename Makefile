@@ -9,7 +9,10 @@ EXCLUDED_SCAN_DIRS := .git,.venv,artifacts,data,env,models,outputs,submissions,v
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv install-dev check validate lint type test security audit data-contract temporal-split validate-submission format clean clean-venv
+BASELINE_LOOKBACK_DAYS ?= 7
+BASELINE_K ?= 12
+
+.PHONY: help venv install-dev check validate lint type test security audit data-contract temporal-split validate-submission baseline format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -29,6 +32,8 @@ help:
 	@printf "Validation/submission:\n"
 	@printf "  make temporal-split CUTOFF=YYYY-MM-DD  Summarize a temporal split\n"
 	@printf "  make validate-submission SUBMISSION=path/to.csv  Validate a submission CSV\n\n"
+	@printf "Baselines:\n"
+	@printf "  make baseline CUTOFF=YYYY-MM-DD  Evaluate repeat+popularity baseline\n\n"
 	@printf "Maintenance:\n"
 	@printf "  make format        Auto-format Python files when present\n"
 	@printf "  make clean         Remove local caches, not data or the virtualenv\n"
@@ -56,7 +61,7 @@ validate: venv
 	"$(VENV)/bin/yamllint" .github .yamllint
 
 audit:
-	$(PYTHON) scripts/check_repo_hygiene.py
+	PYTHONPATH=src $(PYTHON) -m hm_recsys.tools.check_repo_hygiene
 
 lint: venv
 	"$(VENV)/bin/ruff" check .
@@ -65,7 +70,7 @@ lint: venv
 	"$(VENV)/bin/flake8" .
 
 type: venv
-	@files="$$(git ls-files --cached --others --exclude-standard -- '*.py' | grep -Ev '^(data|artifacts|models|outputs|submissions|\.venv|venv|env)/' || true)"; \
+	@files="$$(git ls-files --cached --others --exclude-standard -- '*.py' | grep -Ev '^(data|artifacts|models|outputs|submissions|\.venv|venv|env)/' | while IFS= read -r path; do [[ -f "$$path" ]] && printf '%s\n' "$$path"; done || true)"; \
 	if [[ -n "$$files" ]]; then \
 		"$(VENV_PYTHON)" -m mypy $$files; \
 	else \
@@ -73,7 +78,7 @@ type: venv
 	fi
 
 test: venv
-	@tests="$$(git ls-files --cached --others --exclude-standard -- 'test_*.py' '*_test.py' 'tests/*.py' 'tests/**/*.py' | grep -Ev '^(data|artifacts|models|outputs|submissions|\.venv|venv|env)/' || true)"; \
+	@tests="$$(git ls-files --cached --others --exclude-standard -- 'test_*.py' '*_test.py' 'tests/*.py' 'tests/**/*.py' | grep -Ev '^(data|artifacts|models|outputs|submissions|\.venv|venv|env)/' | while IFS= read -r path; do [[ -f "$$path" ]] && printf '%s\n' "$$path"; done || true)"; \
 	if [[ -n "$$tests" ]]; then \
 		"$(VENV_PYTHON)" -m pytest; \
 	else \
@@ -82,7 +87,7 @@ test: venv
 
 security: venv
 	"$(VENV)/bin/pip-audit" -r requirements-dev.txt --progress-spinner off
-	@files="$$(git ls-files --cached --others --exclude-standard -- '*.py' | grep -Ev '^(data|artifacts|models|outputs|submissions|\.venv|venv|env)/' || true)"; \
+	@files="$$(git ls-files --cached --others --exclude-standard -- '*.py' | grep -Ev '^(data|artifacts|models|outputs|submissions|\.venv|venv|env)/' | while IFS= read -r path; do [[ -f "$$path" ]] && printf '%s\n' "$$path"; done || true)"; \
 	if [[ -n "$$files" ]]; then \
 		"$(VENV)/bin/bandit" -r . --exclude "$(EXCLUDED_SCAN_DIRS)" -ll; \
 	else \
@@ -99,6 +104,10 @@ temporal-split: venv
 validate-submission: venv
 	@if [[ -z "$(SUBMISSION)" ]]; then printf "SUBMISSION is required, e.g. make validate-submission SUBMISSION=submissions/file.csv\n"; exit 2; fi
 	"$(VENV_PYTHON)" -m hm_recsys.cli validate-submission --submission-path "$(SUBMISSION)"
+
+baseline: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make baseline CUTOFF=2020-09-16\n"; exit 2; fi
+	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(BASELINE_K)"
 
 format: venv
 	"$(VENV)/bin/black" .
