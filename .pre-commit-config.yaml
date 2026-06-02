@@ -1,0 +1,59 @@
+default_language_version:
+  python: python3.11
+
+repos:
+  - repo: local
+    hooks:
+      - id: validate-json
+        name: Validate JSON configuration
+        entry: python -m json.tool opencode.json
+        language: system
+        pass_filenames: false
+
+      - id: validate-pyproject
+        name: Validate pyproject TOML
+        entry: python -c 'import tomllib; tomllib.load(open("pyproject.toml", "rb"))'
+        language: system
+        pass_filenames: false
+
+      - id: repository-hygiene
+        name: Check raw data and generated artifact hygiene
+        entry: python -m hm_recsys.tools.check_repo_hygiene
+        language: system
+        pass_filenames: false
+
+      - id: yamllint
+        name: Lint YAML
+        entry: yamllint .github .pre-commit-config.yaml .yamllint
+        language: system
+        pass_filenames: false
+
+      - id: ruff
+        name: Ruff lint
+        entry: ruff check .
+        language: system
+        pass_filenames: false
+
+      - id: black
+        name: Black format check
+        entry: black --check .
+        language: system
+        pass_filenames: false
+
+      - id: isort
+        name: isort import-order check
+        entry: isort --check-only .
+        language: system
+        pass_filenames: false
+
+      - id: flake8
+        name: Flake8 lint
+        entry: flake8 .
+        language: system
+        pass_filenames: false
+
+      - id: mypy
+        name: Mypy strict typing
+        entry: python -m mypy src tests
+        language: system
+        pass_filenames: false
