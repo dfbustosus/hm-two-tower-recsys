@@ -49,6 +49,42 @@ Candidate diagnostics
 .. automodule:: hm_recsys.retrieval.candidate_diagnostics
    :members:
 
+Candidate export
+----------------
+
+.. automodule:: hm_recsys.retrieval.candidate_export
+   :members:
+
+Source names
+------------
+
+.. automodule:: hm_recsys.retrieval.source_names
+   :members:
+
+Co-visitation retrieval
+-----------------------
+
+.. automodule:: hm_recsys.retrieval.co_visitation
+   :members:
+
+Deterministic ranking
+---------------------
+
+.. automodule:: hm_recsys.ranking.deterministic
+   :members:
+
+Learned linear ranking
+----------------------
+
+.. automodule:: hm_recsys.ranking.linear
+   :members:
+
+Rolling ranker validation
+-------------------------
+
+.. automodule:: hm_recsys.ranking.rolling
+   :members:
+
 Embedding contracts
 -------------------
 
