@@ -130,6 +130,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Maintain community and security files: code of conduct, contributing guide, security policy, and PR template.
 - Maintain GitHub Actions for quality checks, typing, security scanning, dependency auditing, secret scanning, and CodeQL.
 - Maintain Dependabot for GitHub Actions and Python development tooling.
+- Maintain a Makefile command surface for local setup, validation, linting, typing, testing, security checks, and artifact hygiene.
 - Define reusable component boundaries before implementation.
 - Keep the specification aligned with major architecture changes.
 
@@ -201,6 +202,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Pull requests use the repository PR template and explicitly state validation, data/artifact impact, leakage risk, ID-format impact, and security impact.
 - GitHub Actions cover repository hygiene, YAML/JSON validation, Python linting, formatting, typing, tests when present, secret scanning, dependency audit, Bandit, and CodeQL when Python source exists.
 - Dependabot is configured for GitHub Actions and Python development tooling with dependency-only PRs.
+- `make venv` creates an ignored local `.venv/`, and `make check` runs the local equivalent of the repository quality gates.
 - Lightweight docs and source files are allowed in git; real data and generated artifacts are not.
 
 ### Data contract acceptance
