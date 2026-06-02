@@ -2,7 +2,7 @@
 
 ## Current Project Layer
 
-The repository is in the **SDD and governance bootstrap** layer. There is not yet production pipeline code, so the correct first move is to define durable contracts before choosing implementations. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
+The repository is in the **foundation implementation** layer. Governance and CI are in place, and production code now uses a standard `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, and submission validation. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
 
 ## Architectural Posture
 
@@ -118,6 +118,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Checkpoints, embeddings, and indexes belong under `models/`.
 - Generated Kaggle files belong under `submissions/`.
 - Production logic should live in importable modules once implementation begins; notebooks may explore but must not become the only source of truth.
+- Production logic uses the `src/hm_recsys/` package layout with synthetic tests under `tests/`.
 - Ranking is a first-class stage. Retrieval scores alone are not assumed sufficient.
 - Submission validation is a hard gate before any CSV is considered usable.
 
@@ -140,6 +141,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Validate required columns, parseable dates, ID string preservation, duplicate semantics, and expected date range.
 - Produce a lightweight data-contract report with row counts, customer counts, article counts, date min/max, and null summaries.
 - Fail fast on missing files, missing columns, or corrupted ID formats.
+- Expose the local check through `make data-contract`; write reports under ignored `artifacts/data-contract/`.
 
 ### Stage 2: Temporal validation
 
@@ -147,12 +149,14 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Match Kaggle scoring behavior by evaluating MAP@12 on validation customers with at least one target purchase.
 - Support rolling validation windows for robustness checks.
 - Log split dates, transaction counts, customer counts, article counts, and excluded rows.
+- Expose split summaries through `make temporal-split CUTOFF=YYYY-MM-DD`; write reports under ignored `artifacts/validation/`.
 
 ### Stage 3: Metrics and submission validation
 
 - Implement MAP@12 with duplicate-prediction handling, empty-label behavior, fewer-than-12 predictions, and deterministic ordering.
 - Implement recall@K and coverage diagnostics for candidates.
 - Validate submission header, exact customer set, max-12 predictions, no duplicate article IDs per row, valid article IDs, and preserved string formatting.
+- Expose submission checks through `make validate-submission SUBMISSION=path/to/file.csv`; write reports under ignored `artifacts/submission-validation/`.
 
 ### Stage 4: Baseline recommenders
 
