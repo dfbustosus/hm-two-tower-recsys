@@ -1,0 +1,67 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - develop
+      - stage
+      - feature/*
+      - QA-*
+    paths-ignore:
+      - docker/**
+  pull_request:
+    branches:
+      - main
+      - dev
+      - develop
+      - stage
+      - feature/*
+      - QA-*
+    paths-ignore:
+      - docker/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python environment
+        uses: ./.github/actions/setup-python-env
+        with:
+          python-version: "3.11"
+
+      - name: Run unit tests with coverage
+        run: >
+          python -m pytest tests/ -v --tb=short
+          --cov=hm_recsys
+          --cov-report=xml
+          --cov-report=html
+          --cov-report=term-missing
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-coverage
+          path: |
+            coverage.xml
+            htmlcov/
+          retention-days: 14
