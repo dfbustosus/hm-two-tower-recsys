@@ -6,7 +6,15 @@ The immediate goal is not to jump directly to a two-tower model. The repository 
 
 ## Current project layer
 
-This repo is in the SDD and governance bootstrap layer. Production modeling code should come only after the data contract, validation contract, metrics, artifact layout, and baseline acceptance checks are explicit.
+This repo is in the foundation implementation layer. Governance, artifact policy, CI, and the initial `src/` package layout are in place. Production foundation components now cover H&M data-contract validation, safe string-ID CSV loading, temporal split summaries, MAP@12/recall metrics, and submission validation. Recommender models should still come only after these checks pass and baseline acceptance criteria are explicit.
+
+## Project structure
+
+- `src/hm_recsys/` contains importable production code.
+- `tests/` contains synthetic unit tests for contracts and edge cases.
+- `scripts/` contains repository-maintenance utilities used by local checks and CI.
+- `docs/` contains the active specification and dependency-management policy.
+- `data/`, `artifacts/`, `models/`, and `submissions/` are local-only ignored paths.
 
 ## Local data and artifact policy
 
@@ -66,6 +74,36 @@ make check
 
 This repository is not using Poetry at the bootstrap stage. The current dependency policy is pinned Python development tools in `requirements-dev.txt`, tool configuration in `pyproject.toml`, and a Makefile command surface. Runtime dependencies should be added only when production package code exists.
 
+Validate the local H&M raw data contract:
+
+```bash
+make data-contract
+```
+
+This writes an ignored JSON report to:
+
+```text
+artifacts/data-contract/data_contract_report.json
+```
+
+Summarize a leakage-safe last-week validation split:
+
+```bash
+make temporal-split CUTOFF=2020-09-16
+```
+
+This writes an ignored JSON report under:
+
+```text
+artifacts/validation/
+```
+
+Validate a generated Kaggle submission when one exists:
+
+```bash
+make validate-submission SUBMISSION=submissions/example.csv
+```
+
 ## Next implementation gate
 
-The next code milestone is foundation work only: data-contract validation, safe string-ID loading, exact temporal split semantics, MAP@12 tests, and submission validation. Recommender models come after those checks pass.
+The next code milestone is the first recommender baseline layer: recent global popularity, repeat-purchase recommendations, deterministic blending, popularity backfill to 12, and offline MAP@12 reporting on the temporal split.
