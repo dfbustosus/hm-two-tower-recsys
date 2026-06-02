@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from hm_recsys.paths import RAW_COMPETITION_DIR_NAME, ProjectPaths, find_project_root
+from hm_recsys.infrastructure.paths import RAW_COMPETITION_DIR_NAME, ProjectPaths, find_project_root
 
 
 def test_find_project_root_from_nested_directory(tmp_path: Path) -> None:
