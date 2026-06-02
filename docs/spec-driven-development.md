@@ -2,7 +2,7 @@
 
 ## Current Project Layer
 
-The repository is in the **candidate diagnostics implementation** layer. Governance and CI are in place, and production code now uses a layered `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, submission validation, repeat-plus-popularity baseline evaluation/submission generation, and baseline candidate-source diagnostics. The package now has explicit contracts for embeddings, indexing, and two-tower training so advanced retrieval can be added without turning the package into a monolith. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
+The repository is in the **ranking baseline implementation** layer. Governance and CI are in place, and production code now uses a layered `src/hm_recsys/` package with tests. Implemented foundation components include H&M data-contract validation, safe CSV/string-ID loading, temporal split summaries, MAP@12/recall metrics, submission validation, repeat-plus-popularity baseline evaluation/submission generation, baseline candidate-source diagnostics, a first leakage-safe co-visitation challenger, ranker-ready candidate-table export, a transparent deterministic ranker baseline, a leakage-safe learned linear ranker baseline trained on a previous temporal window, and rolling-window ranker validation for promotion checks. The package now has explicit contracts for embeddings, indexing, and two-tower training so advanced retrieval can be added without turning the package into a monolith. The repo name mentions two-tower retrieval, but the architecture must not assume a two-tower model is the best solution. For this competition, two-tower retrieval is a challenger that must prove candidate-recall or MAP@12 gains over simpler recency, repeat-purchase, popularity, co-visitation, and ranker baselines.
 
 ## Architectural Posture
 
@@ -176,7 +176,8 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 
 - Add source-specific candidate sets with source name, source rank, and source score.
 - Evaluate per-source and combined recall@12/50/100, coverage, candidates per customer, duplicate rate, and sparse-user performance.
-- Add item-item/co-visitation before more complex graph or neural retrieval.
+- Add item-item/co-visitation before more complex graph or neural retrieval, and ablate source ordering before promotion.
+- Export ranker-ready candidate records with `customer_id,article_id,source,source_rank,source_score` under ignored `artifacts/candidate-exports/`.
 
 ### Stage 6: Feature engineering
 
@@ -190,6 +191,9 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Use candidate-source features and time-aware labels.
 - Compare rankers against the blended baseline with ablations.
 - Promote only when MAP@12 improves on comparable splits without harming candidate coverage or submission validity.
+- Expose the first transparent deterministic ranker through `make ranker-baseline CUTOFF=YYYY-MM-DD`; write reports under ignored `artifacts/ranker-baselines/`.
+- Expose the first leakage-safe learned linear ranker through `make learned-ranker-baseline CUTOFF=YYYY-MM-DD`; train on a previous non-overlapping target window and write reports under ignored `artifacts/ranker-baselines/`.
+- Expose rolling-window ranker promotion checks through `make rolling-ranker-validation`; train each learned ranker on the previous non-overlapping label window and write aggregate reports under ignored `artifacts/ranker-baselines/`.
 
 ### Stage 8: Two-tower and advanced challengers
 
