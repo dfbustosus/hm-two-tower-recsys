@@ -13,10 +13,29 @@ EXCLUDED_SCAN_DIRS := .git,.venv,artifacts,data,env,models,outputs,submissions,v
 BASELINE_LOOKBACK_DAYS ?= 7
 BASELINE_K ?= 12
 BASELINE_SUBMISSION ?= submissions/repeat_popularity_baseline_lookback_$(BASELINE_LOOKBACK_DAYS)_k_$(BASELINE_K).csv
+CANDIDATE_K ?= 12
+CANDIDATE_EXPORT_MAX_CUSTOMERS ?=
+RANKER_K ?= 12
+RANKER_CANDIDATE_K ?= 12
+RANKER_MAX_TARGET_CUSTOMERS ?=
+LEARNED_RANKER_K ?= 12
+LEARNED_RANKER_CANDIDATE_K ?= 12
+LEARNED_RANKER_MAX_TARGET_CUSTOMERS ?=
+LEARNED_RANKER_EPOCHS ?= 3
+LEARNED_RANKER_LEARNING_RATE ?= 0.01
+LEARNED_RANKER_L2 ?= 0.001
+ROLLING_RANKER_CUTOFFS ?= 2020-09-02 2020-09-09 2020-09-16
+ROLLING_RANKER_K ?= 12
+ROLLING_RANKER_CANDIDATE_K ?= 12
+ROLLING_RANKER_MAX_TARGET_CUSTOMERS ?=
+ROLLING_RANKER_EPOCHS ?= 3
+ROLLING_RANKER_LEARNING_RATE ?= 0.01
+ROLLING_RANKER_L2 ?= 0.001
+ROLLING_RANKER_NO_CO_VISITATION ?=
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract temporal-split validate-submission baseline baseline-submission candidate-diagnostics kaggle-submit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline learned-ranker-baseline rolling-ranker-validation kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -43,6 +62,10 @@ help:
 	@printf "  make baseline CUTOFF=YYYY-MM-DD  Evaluate repeat+popularity baseline\n"
 	@printf "  make baseline-submission  Generate and validate repeat+popularity CSV\n"
 	@printf "  make candidate-diagnostics CUTOFF=YYYY-MM-DD  Evaluate candidate sources\n\n"
+	@printf "  make candidate-export CUTOFF=YYYY-MM-DD  Export ranker-ready candidates\n\n"
+	@printf "  make ranker-baseline CUTOFF=YYYY-MM-DD  Evaluate deterministic ranker\n\n"
+	@printf "  make learned-ranker-baseline CUTOFF=YYYY-MM-DD  Train/evaluate linear ranker\n\n"
+	@printf "  make rolling-ranker-validation  Validate rankers across rolling windows\n\n"
 	@printf "Maintenance:\n"
 	@printf "  make format        Auto-format Python files when present\n"
 	@printf "  make clean         Remove local caches, not data or the virtualenv\n"
@@ -131,6 +154,40 @@ baseline-submission: venv
 candidate-diagnostics: venv
 	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make candidate-diagnostics CUTOFF=2020-09-16\n"; exit 2; fi
 	"$(VENV_PYTHON)" -m hm_recsys.cli candidate-diagnostics --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --evaluation-ks 12 50 100
+
+candidate-export: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make candidate-export CUTOFF=2020-09-16\n"; exit 2; fi
+	@extra_args=""; \
+	if [[ -n "$(CANDIDATE_EXPORT_MAX_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(CANDIDATE_EXPORT_MAX_CUSTOMERS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-candidates --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(CANDIDATE_K)" $$extra_args
+
+ranker-baseline: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make ranker-baseline CUTOFF=2020-09-16\n"; exit 2; fi
+	@extra_args=""; \
+	if [[ -n "$(RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" $$extra_args
+
+learned-ranker-baseline: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make learned-ranker-baseline CUTOFF=2020-09-16\n"; exit 2; fi
+	@extra_args=""; \
+	if [[ -n "$(LEARNED_RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(LEARNED_RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-learned-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(LEARNED_RANKER_CANDIDATE_K)" --k "$(LEARNED_RANKER_K)" --epochs "$(LEARNED_RANKER_EPOCHS)" --learning-rate "$(LEARNED_RANKER_LEARNING_RATE)" --l2 "$(LEARNED_RANKER_L2)" $$extra_args
+
+rolling-ranker-validation: venv
+	@extra_args=""; \
+	if [[ -n "$(ROLLING_RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(ROLLING_RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(ROLLING_RANKER_NO_CO_VISITATION)" ]]; then \
+		extra_args="$$extra_args --no-co-visitation"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli rolling-ranker-validation --cutoffs $(ROLLING_RANKER_CUTOFFS) --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(ROLLING_RANKER_CANDIDATE_K)" --k "$(ROLLING_RANKER_K)" --epochs "$(ROLLING_RANKER_EPOCHS)" --learning-rate "$(ROLLING_RANKER_LEARNING_RATE)" --l2 "$(ROLLING_RANKER_L2)" $$extra_args
 
 kaggle-submit: venv
 	@if [[ -z "$(SUBMISSION)" ]]; then printf "SUBMISSION is required, e.g. make kaggle-submit SUBMISSION=submissions/file.csv\n"; exit 2; fi
