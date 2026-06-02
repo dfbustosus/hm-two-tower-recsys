@@ -27,58 +27,7 @@ jobs:
           persist-credentials: false
 
       - name: Assert raw data and generated artifacts are not tracked
-        run: |
-          python - <<'PY'
-          import subprocess
-          import sys
-
-          tracked = subprocess.check_output(["git", "ls-files"], text=True).splitlines()
-          forbidden_prefixes = (
-              "data/raw/",
-              "h-and-m-personalized-fashion-recommendations/",
-              "artifacts/",
-              "models/",
-              "outputs/",
-              "submissions/",
-          )
-          forbidden_root_files = {
-              "articles.csv",
-              "customers.csv",
-              "sample_submission.csv",
-              "transactions_train.csv",
-          }
-          forbidden_suffixes = (
-              ".arrow",
-              ".ckpt",
-              ".faiss",
-              ".feather",
-              ".jpeg",
-              ".jpg",
-              ".npy",
-              ".npz",
-              ".onnx",
-              ".parquet",
-              ".png",
-              ".pt",
-              ".pth",
-          )
-
-          violations = [
-              path
-              for path in tracked
-              if path in forbidden_root_files
-              or path.startswith(forbidden_prefixes)
-              or path.endswith(forbidden_suffixes)
-          ]
-
-          if violations:
-              print("Forbidden tracked data/artifact paths:")
-              for path in violations:
-                  print(f"- {path}")
-              sys.exit(1)
-
-          print("No forbidden raw data or generated artifact paths are tracked.")
-          PY
+        run: python scripts/check_repo_hygiene.py
 
       - name: Set up Python
         uses: actions/setup-python@v6
