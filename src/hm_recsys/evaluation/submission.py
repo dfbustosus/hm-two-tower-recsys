@@ -1,3 +1,5 @@
+"""Kaggle submission validation for H&M recommendation CSV files."""
+
 from __future__ import annotations
 
 import csv
@@ -13,6 +15,26 @@ EXPECTED_SUBMISSION_HEADER = ("customer_id", "prediction")
 
 @dataclass(frozen=True)
 class SubmissionValidationResult:
+    """Structured validation result for a Kaggle submission file.
+
+    Attributes:
+        path: Resolved submission path examined.
+        valid: Whether all submission checks passed.
+        row_count: Number of customer prediction rows read.
+        expected_customer_count: Number of customers in ``sample_submission.csv``.
+        missing_customer_count: Expected customers absent from the submission.
+        extra_customer_count: Customers not present in ``sample_submission.csv``.
+        duplicate_customer_rows: Duplicate customer rows in the submission.
+        rows_with_too_many_predictions: Rows with more than the allowed top-k.
+        rows_with_too_few_predictions: Rows with fewer predictions than required.
+        rows_with_duplicate_predictions: Rows containing repeated article IDs.
+        rows_with_invalid_customer_id_format: Rows with invalid customer IDs.
+        rows_with_invalid_article_id_format: Rows with malformed article IDs.
+        rows_with_unknown_article_ids: Rows containing articles outside articles.csv.
+        failures: Human-readable failure summaries.
+        examples: Bounded row-level examples for debugging.
+    """
+
     path: str
     valid: bool
     row_count: int
@@ -37,6 +59,24 @@ def validate_submission_file(
     max_predictions: int = 12,
     require_full_length: bool = True,
 ) -> SubmissionValidationResult:
+    """Validate a Kaggle-style H&M submission CSV.
+
+    Args:
+        submission_path: CSV path to validate.
+        expected_customer_ids: Authoritative customer IDs from
+            ``sample_submission.csv``.
+        valid_article_ids: Valid article IDs from ``articles.csv``.
+        max_predictions: Maximum number of article IDs per prediction row.
+        require_full_length: Whether every row must contain ``max_predictions``
+            article IDs.
+
+    Returns:
+        Structured submission validation result.
+
+    Raises:
+        ValueError: If ``max_predictions`` is not positive.
+    """
+
     if max_predictions <= 0:
         raise ValueError("max_predictions must be positive")
 
@@ -161,12 +201,31 @@ def validate_submission_file(
 def submission_validation_result_to_dict(
     result: SubmissionValidationResult,
 ) -> dict[str, Any]:
+    """Convert a submission validation result to serializable primitives.
+
+    Args:
+        result: Result object to convert.
+
+    Returns:
+        Dictionary suitable for JSON serialization.
+    """
+
     return asdict(result)
 
 
 def write_submission_validation_report(
     result: SubmissionValidationResult, path: Path | str
 ) -> Path:
+    """Write a submission validation result as deterministic JSON.
+
+    Args:
+        result: Validation result to serialize.
+        path: Destination JSON path.
+
+    Returns:
+        Resolved path written to disk.
+    """
+
     report_path = Path(path).expanduser().resolve()
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
@@ -179,6 +238,8 @@ def write_submission_validation_report(
 def _failed_submission_result(
     path: Path, expected_customer_count: int, failure: str
 ) -> SubmissionValidationResult:
+    """Build a validation result for an unreadable or missing submission file."""
+
     return SubmissionValidationResult(
         path=str(path),
         valid=False,
@@ -199,11 +260,15 @@ def _failed_submission_result(
 
 
 def _append_example(examples: list[str], example: str) -> None:
+    """Append at most ten row-level examples to a diagnostics list."""
+
     if len(examples) < 10:
         examples.append(example)
 
 
 def _extend_count_failures(failures: list[str], counts: dict[str, int]) -> None:
+    """Append failure summaries for non-zero validation counters."""
+
     for label, count in counts.items():
         if count > 0:
             failures.append(f"{label}: {count}")
