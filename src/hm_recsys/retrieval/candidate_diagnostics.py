@@ -24,12 +24,26 @@ from hm_recsys.retrieval.baselines import (
     build_repeat_popularity_candidate_sources,
     merge_ranked_sources,
 )
+from hm_recsys.retrieval.co_visitation import (
+    DEFAULT_MAX_HISTORY_ITEMS,
+    DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    CoVisitationIndex,
+    build_co_visitation_candidates,
+    build_co_visitation_index,
+    co_visitation_article_coverage,
+    co_visitation_candidate_count,
+)
+from hm_recsys.retrieval.source_names import (
+    ALL_TIME_POPULARITY_SOURCE,
+    CO_VISITATION_SOURCE,
+    RECENT_POPULARITY_SOURCE,
+    REPEAT_CO_VISITATION_POPULARITY_BLEND_SOURCE,
+    REPEAT_POPULARITY_BLEND_SOURCE,
+    REPEAT_POPULARITY_CO_VISITATION_BLEND_SOURCE,
+    REPEAT_SOURCE,
+)
 
 DEFAULT_EVALUATION_KS = (12, 50, 100)
-REPEAT_SOURCE = "repeat"
-RECENT_POPULARITY_SOURCE = "recent_popularity"
-ALL_TIME_POPULARITY_SOURCE = "all_time_popularity"
-REPEAT_POPULARITY_BLEND_SOURCE = "repeat_popularity_blend"
 
 
 @dataclass(frozen=True)
@@ -117,6 +131,10 @@ class CandidateDiagnosticsReport:
         popularity_lookback_days: Recent popularity lookback length.
         evaluation_ks: Recall depths evaluated for every source.
         max_candidates_per_customer: Maximum candidate depth generated per source.
+        co_visitation_max_history_items: Maximum recent unique articles retained
+            per customer for co-visitation.
+        co_visitation_max_neighbors_per_item: Maximum neighbors retained per item
+            for co-visitation.
         target_customers: Number of customers requiring candidates.
         evaluated_customers: Number of target customers with validation labels.
         runtime_seconds: Wall-clock runtime for diagnostics.
@@ -131,6 +149,8 @@ class CandidateDiagnosticsReport:
     popularity_lookback_days: int
     evaluation_ks: tuple[int, ...]
     max_candidates_per_customer: int
+    co_visitation_max_history_items: int
+    co_visitation_max_neighbors_per_item: int
     target_customers: int
     evaluated_customers: int
     runtime_seconds: float
@@ -144,6 +164,9 @@ def evaluate_baseline_candidate_diagnostics(
     target_customer_ids: Iterable[str],
     popularity_lookback_days: int = 7,
     evaluation_ks: Sequence[int] = DEFAULT_EVALUATION_KS,
+    include_co_visitation: bool = True,
+    co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
 ) -> CandidateDiagnosticsReport:
     """Evaluate repeat and popularity candidate sources on a temporal split.
 
@@ -156,6 +179,12 @@ def evaluate_baseline_candidate_diagnostics(
         popularity_lookback_days: Number of pre-cutoff days used for recent
             popularity.
         evaluation_ks: Recall cutoffs to report for each source.
+        include_co_visitation: Whether to build and evaluate the co-visitation
+            item-item source and its blend with repeat/popularity.
+        co_visitation_max_history_items: Recent unique customer-history length
+            used by the co-visitation graph.
+        co_visitation_max_neighbors_per_item: Maximum co-visitation neighbors kept
+            per source article.
 
     Returns:
         Candidate diagnostics report for the configured source set.
@@ -188,7 +217,7 @@ def evaluate_baseline_candidate_diagnostics(
         k=max_k,
     )
 
-    source_diagnostics = (
+    source_diagnostics: list[CandidateSourceDiagnostics] = [
         _diagnose_repeat_source(
             sources=sources,
             target_customer_ids=target_customer_tuple,
@@ -211,14 +240,74 @@ def evaluate_baseline_candidate_diagnostics(
             sources=sources,
             evaluation_ks=normalized_ks,
         ),
-        _diagnose_blend_source(
-            sources=sources,
-            popularity_backfill=popularity_backfill,
+        _diagnose_ordered_blend_source(
+            source=REPEAT_POPULARITY_BLEND_SOURCE,
+            retrievers=(
+                lambda customer_id: sources.repeat_recommendations.get(customer_id, ()),
+                lambda customer_id: popularity_backfill,
+            ),
             target_customer_ids=target_customer_tuple,
             labels=labels,
             evaluation_ks=normalized_ks,
+            history_counts=sources.customer_train_purchase_counts,
+            article_coverage=_article_coverage(
+                chain(sources.repeat_recommendations.values(), (popularity_backfill,))
+            ),
+            full_candidate_count=max_k if len(popularity_backfill) >= max_k else None,
         ),
-    )
+    ]
+    if include_co_visitation:
+        co_visitation_index = build_co_visitation_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            max_history_items=co_visitation_max_history_items,
+            max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+        )
+        source_diagnostics.extend(
+            (
+                _diagnose_co_visitation_source(
+                    index=co_visitation_index,
+                    sources=sources,
+                    target_customer_ids=target_customer_tuple,
+                    labels=labels,
+                    evaluation_ks=normalized_ks,
+                ),
+                _diagnose_repeat_co_visitation_popularity_blend_source(
+                    baseline_sources=sources,
+                    co_visitation_index=co_visitation_index,
+                    popularity_backfill=popularity_backfill,
+                    target_customer_ids=target_customer_tuple,
+                    labels=labels,
+                    evaluation_ks=normalized_ks,
+                ),
+                _diagnose_ordered_blend_source(
+                    source=REPEAT_POPULARITY_CO_VISITATION_BLEND_SOURCE,
+                    retrievers=(
+                        lambda customer_id: sources.repeat_recommendations.get(customer_id, ()),
+                        lambda customer_id: popularity_backfill,
+                        lambda customer_id: build_co_visitation_candidates(
+                            co_visitation_index,
+                            customer_id,
+                            k=max_k,
+                        ),
+                    ),
+                    target_customer_ids=target_customer_tuple,
+                    labels=labels,
+                    evaluation_ks=normalized_ks,
+                    history_counts=sources.customer_train_purchase_counts,
+                    article_coverage=_combined_article_coverage(
+                        candidate_lists=chain(
+                            sources.repeat_recommendations.values(),
+                            (popularity_backfill,),
+                        ),
+                        co_visitation_index=co_visitation_index,
+                        target_customer_ids=target_customer_tuple,
+                    ),
+                    full_candidate_count=(max_k if len(popularity_backfill) >= max_k else None),
+                ),
+            )
+        )
     return CandidateDiagnosticsReport(
         generated_at_utc=datetime.now(UTC).isoformat(timespec="seconds"),
         cutoff=split.cutoff.isoformat(),
@@ -227,11 +316,13 @@ def evaluate_baseline_candidate_diagnostics(
         popularity_lookback_days=popularity_lookback_days,
         evaluation_ks=normalized_ks,
         max_candidates_per_customer=max_k,
+        co_visitation_max_history_items=co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=co_visitation_max_neighbors_per_item,
         target_customers=len(target_customer_tuple),
         evaluated_customers=len(labels),
         runtime_seconds=perf_counter() - started_at,
         split_summary=validation_data.summary,
-        sources=source_diagnostics,
+        sources=tuple(source_diagnostics),
     )
 
 
@@ -351,50 +442,175 @@ def _diagnose_global_source(
     )
 
 
-def _diagnose_blend_source(
-    sources: BaselineCandidateSources,
-    popularity_backfill: tuple[str, ...],
+def _diagnose_ordered_blend_source(
+    source: str,
+    retrievers: Sequence[Callable[[str], Iterable[str]]],
     target_customer_ids: Sequence[str],
     labels: Mapping[str, tuple[str, ...]],
     evaluation_ks: tuple[int, ...],
+    history_counts: Mapping[str, int],
+    article_coverage: int,
+    full_candidate_count: int | None = None,
 ) -> CandidateSourceDiagnostics:
-    """Build diagnostics for repeat candidates blended with popularity backfill."""
+    """Build diagnostics for an ordered deterministic source blend.
+
+    Args:
+        source: Name assigned to the blend in reports.
+        retrievers: Ordered candidate retrievers keyed by customer ID.
+        target_customer_ids: Customer universe requiring candidates.
+        labels: Validation labels for target-universe buyers.
+        evaluation_ks: Recall cutoffs to report.
+        history_counts: Pre-cutoff purchase counts by customer.
+        article_coverage: Precomputed article coverage for the source blend.
+        full_candidate_count: Optional constant candidate count when the blend is
+            guaranteed to fill every customer to this depth.
+
+    Returns:
+        Source diagnostics for the ordered blend.
+    """
 
     max_k = max(evaluation_ks)
     label_predictions = {
         customer_id: merge_ranked_sources(
-            (sources.repeat_recommendations.get(customer_id, ()), popularity_backfill),
+            (retriever(customer_id) for retriever in retrievers),
             k=max_k,
         )
         for customer_id in labels
     }
     candidate_counts: Sequence[int]
-    if len(popularity_backfill) >= max_k:
-        candidate_counts = _constant_counts(len(target_customer_ids), max_k)
+    if full_candidate_count is not None:
+        candidate_counts = _constant_counts(len(target_customer_ids), full_candidate_count)
     else:
         candidate_counts = [
             len(
                 merge_ranked_sources(
-                    (sources.repeat_recommendations.get(customer_id, ()), popularity_backfill),
+                    (retriever(customer_id) for retriever in retrievers),
                     k=max_k,
                 )
             )
             for customer_id in target_customer_ids
         ]
-    article_sets = chain(
-        sources.repeat_recommendations.values(),
-        (popularity_backfill,),
-    )
     return _build_source_diagnostics(
-        source=REPEAT_POPULARITY_BLEND_SOURCE,
+        source=source,
         target_customers=len(target_customer_ids),
         labels=labels,
         label_predictions=label_predictions,
         candidate_counts=candidate_counts,
-        article_coverage=_article_coverage(article_sets),
+        article_coverage=article_coverage,
+        duplicate_candidate_rows=0,
+        evaluation_ks=evaluation_ks,
+        history_counts=history_counts,
+    )
+
+
+def _diagnose_co_visitation_source(
+    index: CoVisitationIndex,
+    sources: BaselineCandidateSources,
+    target_customer_ids: Sequence[str],
+    labels: Mapping[str, tuple[str, ...]],
+    evaluation_ks: tuple[int, ...],
+) -> CandidateSourceDiagnostics:
+    """Build diagnostics for co-visitation item-item candidates."""
+
+    max_k = max(evaluation_ks)
+    label_predictions = {
+        customer_id: build_co_visitation_candidates(index, customer_id, k=max_k)
+        for customer_id in labels
+    }
+    candidate_counts = [
+        co_visitation_candidate_count(index, customer_id, k=max_k)
+        for customer_id in target_customer_ids
+    ]
+    return _build_source_diagnostics(
+        source=CO_VISITATION_SOURCE,
+        target_customers=len(target_customer_ids),
+        labels=labels,
+        label_predictions=label_predictions,
+        candidate_counts=candidate_counts,
+        article_coverage=co_visitation_article_coverage(index, target_customer_ids),
         duplicate_candidate_rows=0,
         evaluation_ks=evaluation_ks,
         history_counts=sources.customer_train_purchase_counts,
+    )
+
+
+def _diagnose_repeat_co_visitation_popularity_blend_source(
+    baseline_sources: BaselineCandidateSources,
+    co_visitation_index: CoVisitationIndex,
+    popularity_backfill: tuple[str, ...],
+    target_customer_ids: Sequence[str],
+    labels: Mapping[str, tuple[str, ...]],
+    evaluation_ks: tuple[int, ...],
+) -> CandidateSourceDiagnostics:
+    """Build diagnostics for repeat, co-visitation, then popularity blend."""
+
+    max_k = max(evaluation_ks)
+    return _diagnose_ordered_blend_source(
+        source=REPEAT_CO_VISITATION_POPULARITY_BLEND_SOURCE,
+        retrievers=(
+            lambda customer_id: baseline_sources.repeat_recommendations.get(customer_id, ()),
+            lambda customer_id: build_co_visitation_candidates(
+                co_visitation_index,
+                customer_id,
+                k=max_k,
+            ),
+            lambda customer_id: popularity_backfill,
+        ),
+        target_customer_ids=target_customer_ids,
+        labels=labels,
+        evaluation_ks=evaluation_ks,
+        history_counts=baseline_sources.customer_train_purchase_counts,
+        article_coverage=_combined_article_coverage(
+            candidate_lists=chain(
+                baseline_sources.repeat_recommendations.values(),
+                (popularity_backfill,),
+            ),
+            co_visitation_index=co_visitation_index,
+            target_customer_ids=target_customer_ids,
+        ),
+        full_candidate_count=max_k if len(popularity_backfill) >= max_k else None,
+    )
+
+
+def _co_visitation_reachable_articles(
+    index: CoVisitationIndex,
+    customer_ids: Iterable[str],
+) -> Iterable[str]:
+    """Yield co-visitation neighbor articles reachable from target histories."""
+
+    history_articles = {
+        article_id
+        for customer_id in customer_ids
+        for article_id in index.customer_histories.get(customer_id, ())
+    }
+    for source_article_id in history_articles:
+        for neighbor in index.neighbors_by_article.get(source_article_id, ()):
+            yield neighbor.article_id
+
+
+def _combined_article_coverage(
+    candidate_lists: Iterable[Iterable[str]],
+    co_visitation_index: CoVisitationIndex,
+    target_customer_ids: Iterable[str],
+) -> int:
+    """Count unique articles from explicit lists and reachable co-visitation.
+
+    Args:
+        candidate_lists: Explicit candidate lists from repeat/popularity sources.
+        co_visitation_index: Co-visitation index for reachable neighbor articles.
+        target_customer_ids: Target customer universe.
+
+    Returns:
+        Unique article count across all supplied candidate sources.
+    """
+
+    return len(
+        set(
+            chain(
+                (article_id for candidates in candidate_lists for article_id in candidates),
+                _co_visitation_reachable_articles(co_visitation_index, target_customer_ids),
+            )
+        )
     )
 
 
