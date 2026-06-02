@@ -12,7 +12,7 @@ EXCLUDED_SCAN_DIRS := .git,.venv,artifacts,data,env,models,outputs,submissions,v
 BASELINE_LOOKBACK_DAYS ?= 7
 BASELINE_K ?= 12
 
-.PHONY: help venv install-dev check validate lint type test security audit data-contract temporal-split validate-submission baseline format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract temporal-split validate-submission baseline format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -27,6 +27,8 @@ help:
 	@printf "  make test          Run pytest when tests exist\n"
 	@printf "  make security      Run pip-audit and Bandit when Python files exist\n"
 	@printf "  make audit         Check tracked files for forbidden data/artifacts\n\n"
+	@printf "  make pre-commit    Run pre-commit hooks across all files\n"
+	@printf "  make docs          Build Sphinx documentation locally\n\n"
 	@printf "Data:\n"
 	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
 	@printf "Validation/submission:\n"
@@ -94,6 +96,13 @@ security: venv
 		printf "No Python files detected; skipping Bandit.\n"; \
 	fi
 
+pre-commit: venv
+	"$(VENV)/bin/pre-commit" run --all-files --show-diff-on-failure --color=always
+
+docs: venv
+	"$(VENV_PIP)" install -r docs/requirements.txt
+	"$(VENV_PYTHON)" -m sphinx -b html docs docs/_build/html
+
 data-contract: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli validate-data-contract
 
@@ -115,7 +124,7 @@ format: venv
 	"$(VENV)/bin/ruff" check . --fix
 
 clean:
-	rm -rf .mypy_cache .pytest_cache .ruff_cache .python-files htmlcov .coverage .coverage.* src/*.egg-info
+	rm -rf .mypy_cache .pytest_cache .ruff_cache .python-files htmlcov coverage.xml .coverage .coverage.* docs/_build src/*.egg-info
 	find . \( -path './.git' -o -path './.venv' -o -path './artifacts' -o -path './data' -o -path './models' -o -path './outputs' -o -path './submissions' \) -prune -o -type d -name __pycache__ -exec rm -rf {} +
 
 clean-venv:
