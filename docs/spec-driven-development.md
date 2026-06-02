@@ -129,8 +129,8 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Protect raw Kaggle extraction paths and generated artifact directories from git.
 - Document the canonical local layout and current project layer.
 - Maintain community and security files: code of conduct, contributing guide, security policy, and PR template.
-- Maintain GitHub Actions for quality checks, typing, security scanning, dependency auditing, secret scanning, and CodeQL.
-- Maintain Dependabot for GitHub Actions and Python development tooling.
+- Maintain GitHub Actions for quality checks, typing, pre-commit hooks, unit-test coverage, docs builds, security scanning, dependency auditing, secret scanning, and CodeQL.
+- Maintain Dependabot for GitHub Actions, Python development tooling, and Python documentation tooling.
 - Maintain a Makefile command surface for local setup, validation, linting, typing, testing, security checks, and artifact hygiene.
 - Define reusable component boundaries before implementation.
 - Keep the specification aligned with major architecture changes.
