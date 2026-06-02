@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from hm_recsys.data_contract import (
+from hm_recsys.data.contracts import (
     HM_FILE_CONTRACTS,
     data_contract_report_to_dict,
     validate_hm_data_contract,
