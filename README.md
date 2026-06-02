@@ -41,6 +41,31 @@ The active specification lives in [`docs/spec-driven-development.md`](docs/spec-
 - GitHub Actions run quality, typing, security, secret scanning, dependency audit, and CodeQL checks.
 - Dependabot monitors GitHub Actions and Python development tooling; see [`docs/dependency-management.md`](docs/dependency-management.md).
 
+## Local development
+
+The project targets Python 3.11 for CI and local development. A local virtual environment belongs in `.venv/`; it is intentionally ignored by git.
+
+Create or refresh the environment:
+
+```bash
+make venv
+```
+
+If your default `python3` is not Python 3.11, use:
+
+```bash
+make clean-venv
+make venv PYTHON=python3.11
+```
+
+Run the full local gate before opening a PR:
+
+```bash
+make check
+```
+
+This repository is not using Poetry at the bootstrap stage. The current dependency policy is pinned Python development tools in `requirements-dev.txt`, tool configuration in `pyproject.toml`, and a Makefile command surface. Runtime dependencies should be added only when production package code exists.
+
 ## Next implementation gate
 
 The next code milestone is foundation work only: data-contract validation, safe string-ID loading, exact temporal split semantics, MAP@12 tests, and submission validation. Recommender models come after those checks pass.
