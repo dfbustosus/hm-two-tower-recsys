@@ -56,8 +56,8 @@ The active specification lives in [`docs/spec-driven-development.md`](docs/spec-
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) defines PR and engineering expectations.
 - [`SECURITY.md`](SECURITY.md) defines vulnerability reporting and secret/data handling.
 - [`.github/pull_request_template.md`](.github/pull_request_template.md) requires validation, data, leakage, ID-format, and security checks for each PR.
-- GitHub Actions run quality, typing, security, secret scanning, dependency audit, and CodeQL checks.
-- Dependabot monitors GitHub Actions and Python development tooling; see [`docs/dependency-management.md`](docs/dependency-management.md).
+- GitHub Actions run quality, typing, pre-commit, unit-test coverage, docs build, security, secret scanning, dependency audit, and CodeQL checks.
+- Dependabot monitors GitHub Actions, Python development tooling, and Python documentation tooling; see [`docs/dependency-management.md`](docs/dependency-management.md).
 
 ## Local development
 
@@ -82,7 +82,20 @@ Run the full local gate before opening a PR:
 make check
 ```
 
-This repository is not using Poetry at the bootstrap stage. The current dependency policy is pinned Python development tools in `requirements-dev.txt`, tool configuration in `pyproject.toml`, and a Makefile command surface. Runtime dependencies should be added only when production package code exists.
+Run pre-commit hooks locally before pushing when you want the same fast static
+checks used by CI:
+
+```bash
+make pre-commit
+```
+
+Build the Sphinx documentation locally:
+
+```bash
+make docs
+```
+
+This repository is not using Poetry at the foundation stage. The current dependency policy is pinned Python development tools in `requirements-dev.txt`, pinned documentation tools in `docs/requirements.txt`, tool configuration in `pyproject.toml`, and a Makefile command surface. Runtime dependencies should be added only when production package code actually requires them.
 
 Validate the local H&M raw data contract:
 
