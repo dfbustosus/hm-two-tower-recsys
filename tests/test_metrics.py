@@ -1,6 +1,6 @@
 import pytest
 
-from hm_recsys.metrics import (
+from hm_recsys.evaluation.metrics import (
     average_precision_at_k,
     dedupe_preserve_order,
     mean_average_precision_at_k,
