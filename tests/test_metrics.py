@@ -18,8 +18,16 @@ def test_average_precision_at_k_known_example() -> None:
     assert score == pytest.approx((1.0 + 2.0 / 3.0) / 2.0)
 
 
-def test_average_precision_at_k_no_extra_credit_for_duplicate_predictions() -> None:
-    assert average_precision_at_k(actual=["a", "b"], predicted=["a", "a", "b"], k=12) == 1.0
+def test_average_precision_at_k_duplicate_predictions_consume_rank_slots() -> None:
+    score = average_precision_at_k(actual=["a", "b"], predicted=["a", "a", "b"], k=12)
+
+    assert score == pytest.approx((1.0 + 2.0 / 3.0) / 2.0)
+
+
+def test_average_precision_at_k_does_not_rescue_items_beyond_k_after_dedupe() -> None:
+    score = average_precision_at_k(actual=["b"], predicted=["a", "a", "b"], k=2)
+
+    assert score == 0.0
 
 
 def test_average_precision_at_k_deduplicates_repeated_actual_purchases() -> None:
@@ -37,7 +45,11 @@ def test_mean_average_precision_excludes_empty_actuals_by_default() -> None:
 
 
 def test_recall_at_k_uses_unique_actuals_and_predictions() -> None:
-    assert recall_at_k(actual=["a", "a", "b", "c"], predicted=["a", "a", "z", "b"], k=3) == 2 / 3
+    assert recall_at_k(actual=["a", "a", "b", "c"], predicted=["a", "a", "z", "b"], k=3) == 1 / 3
+
+
+def test_recall_at_k_does_not_rescue_items_beyond_k_after_dedupe() -> None:
+    assert recall_at_k(actual=["b"], predicted=["a", "a", "b"], k=2) == 0.0
 
 
 def test_metric_k_must_be_positive() -> None:
