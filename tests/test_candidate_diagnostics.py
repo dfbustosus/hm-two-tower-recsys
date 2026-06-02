@@ -6,12 +6,17 @@ import pytest
 from hm_recsys.data.io import TransactionEvent
 from hm_recsys.evaluation.temporal import TemporalSplit
 from hm_recsys.retrieval.candidate_diagnostics import (
-    ALL_TIME_POPULARITY_SOURCE,
-    RECENT_POPULARITY_SOURCE,
-    REPEAT_POPULARITY_BLEND_SOURCE,
-    REPEAT_SOURCE,
     evaluate_baseline_candidate_diagnostics,
     write_candidate_diagnostics_report,
+)
+from hm_recsys.retrieval.source_names import (
+    ALL_TIME_POPULARITY_SOURCE,
+    CO_VISITATION_SOURCE,
+    RECENT_POPULARITY_SOURCE,
+    REPEAT_CO_VISITATION_POPULARITY_BLEND_SOURCE,
+    REPEAT_POPULARITY_BLEND_SOURCE,
+    REPEAT_POPULARITY_CO_VISITATION_BLEND_SOURCE,
+    REPEAT_SOURCE,
 )
 
 CUSTOMER_ID = "a" * 64
@@ -54,6 +59,15 @@ def test_candidate_diagnostics_compare_sources_without_validation_leakage() -> N
     assert source_metrics[ALL_TIME_POPULARITY_SOURCE].map_at_12 == pytest.approx(0.75)
     assert source_metrics[REPEAT_POPULARITY_BLEND_SOURCE].map_at_12 == pytest.approx(1.0)
     assert source_metrics[REPEAT_POPULARITY_BLEND_SOURCE].recall_at_k == {
+        "1": 1.0,
+        "2": 1.0,
+    }
+    assert source_metrics[CO_VISITATION_SOURCE].evaluated_customers == 2
+    assert source_metrics[REPEAT_CO_VISITATION_POPULARITY_BLEND_SOURCE].recall_at_k == {
+        "1": 1.0,
+        "2": 1.0,
+    }
+    assert source_metrics[REPEAT_POPULARITY_CO_VISITATION_BLEND_SOURCE].recall_at_k == {
         "1": 1.0,
         "2": 1.0,
     }
