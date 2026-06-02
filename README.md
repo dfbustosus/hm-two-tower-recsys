@@ -10,11 +10,21 @@ This repo is in the foundation implementation layer. Governance, artifact policy
 
 ## Project structure
 
-- `src/hm_recsys/` contains importable production code.
+- `src/hm_recsys/` contains importable production code organized by layer:
+  - `core/`: ID and shared validation primitives.
+  - `data/`: data contracts and safe CSV/string-ID loading.
+  - `evaluation/`: temporal splits, MAP@12/recall metrics, and submission validation.
+  - `retrieval/`: candidate generation and retrieval baselines.
+  - `embeddings/`: provider contracts and factories for text, image, and multimodal embeddings.
+  - `indexing/`: vector-index contracts and factories for retrieval pipelines.
+  - `training/`: training configuration contracts, including two-tower retrieval.
+  - `infrastructure/`: path resolution and local artifact locations.
+  - `tools/`: repository-maintenance utilities used by local checks and CI.
 - `tests/` contains synthetic unit tests for contracts and edge cases.
-- `scripts/` contains repository-maintenance utilities used by local checks and CI.
 - `docs/` contains the active specification and dependency-management policy.
 - `data/`, `artifacts/`, `models/`, and `submissions/` are local-only ignored paths.
+
+The multi-stage architecture plan is documented in [`docs/architecture.md`](docs/architecture.md).
 
 ## Local data and artifact policy
 
@@ -104,6 +114,18 @@ Validate a generated Kaggle submission when one exists:
 make validate-submission SUBMISSION=submissions/example.csv
 ```
 
+Evaluate the first leakage-safe baseline on a temporal split:
+
+```bash
+make baseline CUTOFF=2020-09-16
+```
+
+This evaluates repeat purchases plus recent global popularity with deterministic backfill to 12 and writes an ignored report under:
+
+```text
+artifacts/baselines/
+```
+
 ## Next implementation gate
 
-The next code milestone is the first recommender baseline layer: recent global popularity, repeat-purchase recommendations, deterministic blending, popularity backfill to 12, and offline MAP@12 reporting on the temporal split.
+The next code milestone is baseline candidate diagnostics: source-specific recall, candidate count distributions, sparse-user slices, and comparison of repeat-only, popularity-only, and blended variants before adding co-visitation.
