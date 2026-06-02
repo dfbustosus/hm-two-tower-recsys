@@ -20,21 +20,33 @@ Contributions must preserve the repository's core contract: H&M recommendations 
 
 ## Local Quality Checks
 
-The GitHub Actions workflows use the tools listed in `requirements-dev.txt`. Install them locally when you start implementing Python code:
+The GitHub Actions workflows use the tools pinned in `requirements-dev.txt`. Create the ignored local virtual environment with:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+make venv
 ```
 
-Run the relevant checks before requesting review:
+If `python3` does not resolve to Python 3.11 locally, use:
 
 ```bash
-ruff check .
-black --check .
-isort --check-only .
-flake8 .
-mypy <changed-python-files>
-bandit -r . --exclude data,artifacts,models,outputs,submissions
+make clean-venv
+make venv PYTHON=python3.11
+```
+
+Run the full gate before requesting review:
+
+```bash
+make check
+```
+
+Useful narrower commands are:
+
+```bash
+make validate
+make lint
+make type
+make security
+make test
 ```
 
 If the repository has no Python source yet, the CI workflows intentionally skip Python-specific linting and typing while still checking repository governance.
