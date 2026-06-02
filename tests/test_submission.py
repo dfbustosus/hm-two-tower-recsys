@@ -1,7 +1,11 @@
 import csv
 from pathlib import Path
 
-from hm_recsys.evaluation.submission import validate_submission_file
+from hm_recsys.evaluation.submission import (
+    EXPECTED_SUBMISSION_HEADER,
+    validate_submission_file,
+    write_submission_file,
+)
 
 CUSTOMER_ID = "a" * 64
 SECOND_CUSTOMER_ID = "b" * 64
@@ -83,6 +87,27 @@ def test_submission_validator_requires_exact_header(tmp_path: Path) -> None:
 
     assert not result.valid
     assert "header" in result.failures[0]
+
+
+def test_write_submission_file_preserves_customer_order_and_format(tmp_path: Path) -> None:
+    submission_path = tmp_path / "submission.csv"
+
+    written_path = write_submission_file(
+        predictions_by_customer={
+            SECOND_CUSTOMER_ID: (ARTICLE_IDS[1], ARTICLE_IDS[0]),
+            CUSTOMER_ID: (ARTICLE_IDS[0],),
+        },
+        customer_ids=(CUSTOMER_ID, SECOND_CUSTOMER_ID),
+        path=submission_path,
+        max_predictions=2,
+    )
+
+    assert written_path == submission_path.resolve()
+    assert submission_path.read_text(encoding="utf-8").splitlines() == [
+        ",".join(EXPECTED_SUBMISSION_HEADER),
+        f"{CUSTOMER_ID},{ARTICLE_IDS[0]}",
+        f"{SECOND_CUSTOMER_ID},{ARTICLE_IDS[1]} {ARTICLE_IDS[0]}",
+    ]
 
 
 def write_submission(path: Path, rows: dict[str, tuple[str, ...]]) -> None:
