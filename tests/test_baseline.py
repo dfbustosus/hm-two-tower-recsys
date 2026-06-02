@@ -7,7 +7,9 @@ from hm_recsys.evaluation.temporal import TemporalSplit
 from hm_recsys.retrieval.baselines import (
     ArticleStats,
     build_repeat_popularity_baseline,
+    build_repeat_popularity_submission_baseline,
     evaluate_repeat_popularity_baseline,
+    find_max_transaction_date,
     rank_article_stats,
 )
 
@@ -123,6 +125,54 @@ def test_baseline_evaluation_reports_perfect_score_for_repeat_hit() -> None:
     assert report.map_at_k == pytest.approx(1.0)
     assert report.recall_at_k == pytest.approx(1.0)
     assert report.diagnostics.customers_with_full_length_predictions == 1
+
+
+def test_baseline_evaluation_predicts_target_universe_but_scores_label_customers() -> None:
+    split = TemporalSplit.from_isoformat("2020-01-08")
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 8), CUSTOMER_ID, ARTICLE_1),
+    ]
+
+    report = evaluate_repeat_popularity_baseline(
+        transaction_iter_factory=lambda: iter(events),
+        split=split,
+        target_customer_ids=[CUSTOMER_ID, COLD_CUSTOMER_ID],
+        k=1,
+        popularity_lookback_days=7,
+    )
+
+    assert report.diagnostics.target_customers == 2
+    assert report.diagnostics.evaluated_customers == 1
+    assert report.diagnostics.customers_with_full_length_predictions == 2
+    assert report.diagnostics.prediction_coverage == pytest.approx(1.0)
+    assert report.map_at_k == pytest.approx(1.0)
+
+
+def test_submission_baseline_uses_all_training_rows_and_sample_universe() -> None:
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 8), CUSTOMER_ID, ARTICLE_2),
+    ]
+
+    submission = build_repeat_popularity_submission_baseline(
+        transaction_iter_factory=lambda: iter(events),
+        target_customer_ids=[CUSTOMER_ID, COLD_CUSTOMER_ID],
+        k=2,
+        popularity_lookback_days=7,
+    )
+
+    assert submission.max_transaction_date == date(2020, 1, 8)
+    assert submission.training_cutoff == date(2020, 1, 9)
+    assert submission.predictions.train_rows_used == 2
+    assert submission.diagnostics.target_customers == 2
+    assert submission.predictions.predictions[CUSTOMER_ID] == (ARTICLE_2, ARTICLE_1)
+    assert submission.predictions.predictions[COLD_CUSTOMER_ID] == (ARTICLE_2, ARTICLE_1)
+
+
+def test_find_max_transaction_date_rejects_empty_input() -> None:
+    with pytest.raises(ValueError, match="without transactions"):
+        find_max_transaction_date(())
 
 
 def make_stats(count: int, last_seen: date) -> ArticleStats:
