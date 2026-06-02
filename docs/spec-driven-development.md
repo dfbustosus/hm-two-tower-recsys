@@ -225,7 +225,7 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 
 ### Metric acceptance
 
-- MAP@12 treats each customer's actual target articles as a unique set for relevance, uses the denominator `min(number_of_unique_actual_articles, 12)`, ignores ranks beyond 12, and gives no extra credit for duplicate predictions.
+- MAP@12 treats each customer's actual target articles as a unique set for relevance, uses the denominator `min(number_of_unique_actual_articles, 12)`, ignores ranks beyond 12, and gives no extra credit for duplicate predictions while still letting duplicates consume rank slots.
 - Unit tests cover MAP@12 known examples, duplicate predictions, repeated actual purchases, empty actuals, fewer than 12 predictions, customers with no labels, and deterministic ranking ties.
 - Candidate diagnostics report recall@12, recall@50, recall@100, coverage, candidate counts, duplicate rate, and source contribution.
 
