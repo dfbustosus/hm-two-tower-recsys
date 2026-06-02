@@ -40,6 +40,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
+          python -m pip install -e .
 
       - name: Validate JSON configuration
         run: python -m json.tool opencode.json > /tmp/opencode.json
