@@ -7,10 +7,11 @@ This repository uses Dependabot to keep automation and Python development toolin
 - Python version target: `3.11`, recorded in `.python-version` and CI workflows.
 - Local environment: `.venv/`, created with `make venv`, ignored by git.
 - Package layout: installable `src/` package configured in `pyproject.toml`.
-- Runtime dependencies: currently empty because the Stage 1 validator uses the Python standard library.
-- Development tooling: exact pins in `requirements-dev.txt`.
+- Runtime dependencies: currently empty because the foundation package uses the Python standard library.
+- Development tooling: exact pins in `requirements-dev.txt`, including linting, typing, testing, coverage, security, and pre-commit tools.
+- Documentation tooling: exact pins in `docs/requirements.txt`, with the docs extra declared in `pyproject.toml` so Sphinx builds can install the package consistently.
 - Tool configuration: `pyproject.toml`, `.flake8`, and `.yamllint`.
-- Command surface: `Makefile` targets such as `make check`, `make lint`, `make security`, and `make test`.
+- Command surface: `Makefile` targets such as `make check`, `make lint`, `make security`, `make pre-commit`, `make docs`, and `make test`.
 
 The repository is not using Poetry at this stage because there is not yet a runtime dependency graph. Introducing Poetry now would create ceremony without solving an actual packaging problem. Re-evaluate Poetry, uv, or another lockfile-based manager when runtime dependencies and packaging needs become more complex.
 
@@ -18,6 +19,7 @@ The repository is not using Poetry at this stage because there is not yet a runt
 
 - GitHub Actions in `.github/workflows/`.
 - Python development tooling in `requirements-dev.txt`.
+- Python documentation tooling in `docs/requirements.txt`.
 
 ## Review Rules
 
@@ -35,4 +37,4 @@ Dependabot runs weekly. Security updates should be reviewed before routine versi
 
 ## Pinning Policy
 
-The current repo is in the bootstrap layer and pins development tools exactly in `requirements-dev.txt` for deterministic CI. When production Python packaging begins, add an application dependency lock strategy and update this document.
+The current repo is in the foundation layer and pins development and documentation tools exactly for deterministic CI. When production Python packaging begins, add an application dependency lock strategy and update this document.
