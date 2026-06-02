@@ -4,15 +4,26 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from hm_recsys.data_contract import validate_hm_data_contract, write_data_contract_report
-from hm_recsys.paths import ProjectPaths
-from hm_recsys.safe_io import (
+from hm_recsys.data.contracts import validate_hm_data_contract, write_data_contract_report
+from hm_recsys.data.io import (
     iter_transaction_events,
     load_article_ids,
     load_submission_customer_ids,
 )
-from hm_recsys.submission import validate_submission_file, write_submission_validation_report
-from hm_recsys.temporal import TemporalSplit, summarize_temporal_split, write_temporal_split_summary
+from hm_recsys.evaluation.submission import (
+    validate_submission_file,
+    write_submission_validation_report,
+)
+from hm_recsys.evaluation.temporal import (
+    TemporalSplit,
+    summarize_temporal_split,
+    write_temporal_split_summary,
+)
+from hm_recsys.infrastructure.paths import ProjectPaths
+from hm_recsys.retrieval.baselines import (
+    evaluate_repeat_popularity_baseline,
+    write_baseline_evaluation_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,6 +87,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow fewer than 12 predictions per customer.",
     )
     submission_parser.set_defaults(handler=_handle_validate_submission)
+
+    baseline_parser = subparsers.add_parser(
+        "evaluate-baseline",
+        help="Evaluate repeat-purchase plus recent-popularity baseline on a temporal split.",
+    )
+    baseline_parser.add_argument(
+        "--cutoff", required=True, help="Validation cutoff date, YYYY-MM-DD."
+    )
+    baseline_parser.add_argument("--horizon-days", type=int, default=7)
+    baseline_parser.add_argument("--popularity-lookback-days", type=int, default=7)
+    baseline_parser.add_argument("--k", type=int, default=12)
+    baseline_parser.add_argument("--project-root", type=Path, default=None)
+    baseline_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    baseline_parser.add_argument("--report-path", type=Path, default=None)
+    baseline_parser.set_defaults(handler=_handle_evaluate_baseline)
     return parser
 
 
@@ -143,6 +169,39 @@ def _handle_validate_submission(args: argparse.Namespace) -> int:
     for failure in result.failures:
         print(f"- {failure}")
     return 0 if result.valid else 1
+
+
+def _handle_evaluate_baseline(args: argparse.Namespace) -> int:
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    report_path = args.report_path or paths.baseline_report_path(
+        cutoff=args.cutoff,
+        lookback_days=args.popularity_lookback_days,
+        k=args.k,
+    )
+    if not report_path.is_absolute():
+        report_path = paths.root / report_path
+
+    report = evaluate_repeat_popularity_baseline(
+        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        split=split,
+        k=args.k,
+        popularity_lookback_days=args.popularity_lookback_days,
+    )
+    written_report_path = write_baseline_evaluation_report(report, report_path)
+    print(f"Cutoff: {report.cutoff}")
+    print(f"Validation end exclusive: {report.validation_end_exclusive}")
+    print(f"MAP@{report.k}: {report.map_at_k:.8f}")
+    print(f"Recall@{report.k}: {report.recall_at_k:.8f}")
+    print(f"Evaluated customers: {report.diagnostics.evaluated_customers}")
+    print(
+        "Full-length prediction coverage: "
+        f"{report.diagnostics.customers_with_full_length_predictions}/"
+        f"{report.diagnostics.evaluated_customers}"
+    )
+    print(f"Duplicate prediction rows: {report.diagnostics.duplicate_prediction_rows}")
+    print(f"Report written to: {written_report_path}")
+    return 0
 
 
 def _resolve_report_path(paths: ProjectPaths, report_path: Path | None) -> Path:
