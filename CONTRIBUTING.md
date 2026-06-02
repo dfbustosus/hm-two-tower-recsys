@@ -49,7 +49,7 @@ make security
 make test
 ```
 
-If the repository has no Python source yet, the CI workflows intentionally skip Python-specific linting and typing while still checking repository governance.
+The CI workflows discover Python files and tests automatically. Data-dependent commands such as `make data-contract` require local Kaggle files and are not run in public CI.
 
 ## Pull Request Expectations
 
