@@ -1,0 +1,34 @@
+name: Set up Python project environment
+description: Install the pinned development environment for this repository.
+
+inputs:
+  python-version:
+    description: Python version used by CI jobs.
+    required: false
+    default: "3.11"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: pip
+        cache-dependency-path: |
+          requirements-dev.txt
+          docs/requirements.txt
+
+    - name: Install pinned development dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -r requirements-dev.txt
+        python -m pip install -e .
+
+    - name: Print environment summary
+      shell: bash
+      run: |
+        python --version
+        python -m pip --version
+        python -c "import hm_recsys; print(f'hm_recsys {hm_recsys.__version__}')"
