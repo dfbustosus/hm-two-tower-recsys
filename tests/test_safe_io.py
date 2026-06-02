@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hm_recsys.safe_io import (
+from hm_recsys.data.io import (
     CsvSchemaError,
     CsvValueError,
     iter_transaction_events,
