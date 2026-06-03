@@ -94,12 +94,45 @@ def test_content_similarity_can_keep_history_when_configured() -> None:
     assert candidates[0].article_id == "0100000000"
 
 
+def test_content_similarity_can_rerank_with_popularity_prior() -> None:
+    split = TemporalSplit.from_isoformat("2020-09-16", horizon_days=7)
+    transactions = (
+        TransactionEvent(split.cutoff.replace(day=1), CUSTOMER_ID, "0100000000"),
+        TransactionEvent(split.cutoff.replace(day=2), OTHER_CUSTOMER_ID, "0400000000"),
+        TransactionEvent(split.cutoff.replace(day=3), OTHER_CUSTOMER_ID, "0400000000"),
+    )
+    index = build_content_similarity_index(
+        transactions,
+        split,
+        target_customer_ids=(CUSTOMER_ID,),
+        embedding_records=_embedding_records(),
+        popularity_prior_weight=0.5,
+        popularity_lookback_days=30,
+        candidate_pool_size=3,
+    )
+
+    candidates = build_content_similarity_candidate_records(index, CUSTOMER_ID, k=1)
+
+    assert index.article_popularity_priors["0400000000"] == 1.0
+    assert candidates[0].article_id == "0400000000"
+
+
 def test_content_similarity_rejects_invalid_configuration() -> None:
     split = TemporalSplit.from_isoformat("2020-09-16", horizon_days=7)
     with pytest.raises(ValueError, match="source_name"):
         build_content_similarity_index((), split, (), _embedding_records(), source_name="")
     with pytest.raises(ValueError, match="max_history_items"):
         build_content_similarity_index((), split, (), _embedding_records(), max_history_items=0)
+    with pytest.raises(ValueError, match="popularity_prior_weight"):
+        build_content_similarity_index(
+            (), split, (), _embedding_records(), popularity_prior_weight=1.5
+        )
+    with pytest.raises(ValueError, match="popularity_lookback_days"):
+        build_content_similarity_index(
+            (), split, (), _embedding_records(), popularity_lookback_days=0
+        )
+    with pytest.raises(ValueError, match="candidate_pool_size"):
+        build_content_similarity_index((), split, (), _embedding_records(), candidate_pool_size=0)
     with pytest.raises(ValueError, match="embedding_records"):
         build_content_similarity_index((), split, (), ())
     with pytest.raises(ValueError, match="same dimension"):
