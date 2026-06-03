@@ -11,6 +11,7 @@ from hm_recsys.embeddings.article_content import (
     article_content_record_to_row,
     combine_article_text_fields,
     iter_article_content_records,
+    iter_article_content_records_from_csv,
     write_article_content_export,
 )
 
@@ -158,6 +159,13 @@ def test_write_article_content_export_writes_csv_and_summary(tmp_path: Path) -> 
     assert report["text_field_names"] == ["prod_name", "colour_group_name", "detail_desc"]
     assert report["records_written"] == 2
 
+    read_records = tuple(iter_article_content_records_from_csv(output_path))
+    assert read_records[0].article_id == "0108775015"
+    assert read_records[0].combined_text.startswith("prod name: Wide trousers")
+    assert read_records[0].image_exists is True
+    assert read_records[1].article_id == "0201234567"
+    assert read_records[1].image_exists is False
+
 
 def test_article_content_export_rejects_invalid_field_config(tmp_path: Path) -> None:
     raw_dir = tmp_path / "raw"
@@ -174,6 +182,25 @@ def test_article_content_export_rejects_invalid_field_config(tmp_path: Path) -> 
             report_path=tmp_path / "out.json",
             max_examples=-1,
         )
+
+
+def test_iter_article_content_records_from_csv_rejects_invalid_header_and_boolean(
+    tmp_path: Path,
+) -> None:
+    invalid_header_path = tmp_path / "invalid_header.csv"
+    invalid_header_path.write_text("article_id,image_exists\n0108775015,true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="article-content columns"):
+        tuple(iter_article_content_records_from_csv(invalid_header_path))
+
+    invalid_bool_path = tmp_path / "invalid_bool.csv"
+    invalid_bool_path.write_text(
+        "article_id,combined_text,image_relative_path,image_exists,prod_name\n"
+        "0108775015,text,images/010/0108775015.jpg,yes,shirt\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="image_exists"):
+        tuple(iter_article_content_records_from_csv(invalid_bool_path))
 
 
 def test_default_article_text_fields_match_export_header_contract() -> None:
