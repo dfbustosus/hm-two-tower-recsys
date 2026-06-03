@@ -481,6 +481,62 @@ class ProjectPaths:
         inventory_dir = self.artifacts_dir / "multimodal" / "image-inventory"
         return inventory_dir / "article_image_inventory.json"
 
+    @property
+    def article_content_export_path(self) -> Path:
+        """Return the default article content export CSV path.
+
+        Returns:
+            Path under ``artifacts/multimodal/article-content/``.
+        """
+
+        content_dir = self.artifacts_dir / "multimodal" / "article-content"
+        return content_dir / "article_content.csv"
+
+    @property
+    def article_content_export_report_path(self) -> Path:
+        """Return the default article content export JSON report path.
+
+        Returns:
+            Path under ``artifacts/multimodal/article-content/``.
+        """
+
+        content_dir = self.artifacts_dir / "multimodal" / "article-content"
+        return content_dir / "article_content.json"
+
+    def article_embedding_cache_dir(self, provider_slug: str) -> Path:
+        """Return the default article embedding cache directory for a provider.
+
+        Args:
+            provider_slug: Filesystem-safe provider/model descriptor.
+
+        Returns:
+            Path under ``models/embeddings/articles/``.
+        """
+
+        if not provider_slug:
+            raise ValueError("provider_slug must not be empty")
+        return self.models_dir / "embeddings" / "articles" / _safe_name(provider_slug)
+
+    def article_embedding_cache_manifest_path(
+        self,
+        provider_slug: str,
+        embedding_kind: str,
+    ) -> Path:
+        """Return the default article embedding cache manifest path.
+
+        Args:
+            provider_slug: Filesystem-safe provider/model descriptor.
+            embedding_kind: Embedding family such as ``image`` or ``text``.
+
+        Returns:
+            JSON manifest path under ``models/embeddings/articles/``.
+        """
+
+        if not embedding_kind:
+            raise ValueError("embedding_kind must not be empty")
+        cache_dir = self.article_embedding_cache_dir(provider_slug)
+        return cache_dir / f"{_safe_name(embedding_kind)}_manifest.json"
+
 
 def _safe_name(value: str) -> str:
     """Return a filesystem-safe name derived from an arbitrary string."""
