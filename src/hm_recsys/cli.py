@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from datetime import timedelta
 from pathlib import Path
 
 from hm_recsys.data.contracts import validate_hm_data_contract, write_data_contract_report
@@ -41,9 +42,15 @@ from hm_recsys.ranking.rolling import (
     build_rolling_ranker_validation_report,
     write_rolling_ranker_validation_report,
 )
+from hm_recsys.ranking.submission import (
+    build_learned_linear_ranker_submission_report,
+    build_linear_ranker_submission_predictions,
+    write_learned_linear_ranker_submission_report,
+)
 from hm_recsys.retrieval.baselines import (
     build_repeat_popularity_submission_baseline,
     evaluate_repeat_popularity_baseline,
+    find_max_transaction_date,
     write_baseline_evaluation_report,
 )
 from hm_recsys.retrieval.candidate_diagnostics import (
@@ -52,7 +59,6 @@ from hm_recsys.retrieval.candidate_diagnostics import (
     write_candidate_diagnostics_report,
 )
 from hm_recsys.retrieval.candidate_export import (
-    CandidateExportSummary,
     select_validation_label_customer_ids,
     write_candidate_export_summary,
     write_validation_candidate_export,
@@ -405,6 +411,51 @@ def build_parser() -> argparse.ArgumentParser:
     rolling_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
     rolling_ranker_parser.add_argument("--report-path", type=Path, default=None)
     rolling_ranker_parser.set_defaults(handler=_handle_rolling_ranker_validation)
+
+    learned_submission_parser = subparsers.add_parser(
+        "generate-learned-ranker-submission",
+        help="Train latest-window linear ranker and generate a validated Kaggle CSV.",
+    )
+    learned_submission_parser.add_argument("--horizon-days", type=int, default=7)
+    learned_submission_parser.add_argument("--popularity-lookback-days", type=int, default=7)
+    learned_submission_parser.add_argument("--candidate-k", type=int, default=12)
+    learned_submission_parser.add_argument("--k", type=int, default=12)
+    learned_submission_parser.add_argument("--epochs", type=int, default=3)
+    learned_submission_parser.add_argument("--learning-rate", type=float, default=0.01)
+    learned_submission_parser.add_argument("--l2", type=float, default=0.001)
+    learned_submission_parser.add_argument("--positive-weight", type=float, default=None)
+    learned_submission_parser.add_argument("--max-auto-positive-weight", type=float, default=10.0)
+    learned_submission_parser.add_argument(
+        "--no-co-visitation",
+        action="store_true",
+        help="Disable co-visitation candidate rows.",
+    )
+    learned_submission_parser.add_argument(
+        "--co-visitation-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+        help=(
+            "Recent unique articles per customer for co-visitation. "
+            f"Defaults to {DEFAULT_MAX_HISTORY_ITEMS}."
+        ),
+    )
+    learned_submission_parser.add_argument(
+        "--co-visitation-max-neighbors-per-item",
+        type=int,
+        default=DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+        help=(
+            "Neighbors retained per source article. "
+            f"Defaults to {DEFAULT_MAX_NEIGHBORS_PER_ITEM}."
+        ),
+    )
+    learned_submission_parser.add_argument("--project-root", type=Path, default=None)
+    learned_submission_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    learned_submission_parser.add_argument("--train-candidate-output-path", type=Path, default=None)
+    learned_submission_parser.add_argument("--train-candidate-report-path", type=Path, default=None)
+    learned_submission_parser.add_argument("--output-path", type=Path, default=None)
+    learned_submission_parser.add_argument("--validation-report-path", type=Path, default=None)
+    learned_submission_parser.add_argument("--report-path", type=Path, default=None)
+    learned_submission_parser.set_defaults(handler=_handle_generate_learned_ranker_submission)
     return parser
 
 
@@ -1009,7 +1060,7 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
         max_auto_positive_weight=args.max_auto_positive_weight,
     )
 
-    candidate_export_cache: dict[Path, tuple[CandidateExportSummary, Path]] = {}
+    candidate_export_cache: dict[Path, Path] = {}
     labels_cache: dict[tuple[str, int], dict[str, tuple[str, ...]]] = {}
     learned_reports = []
 
@@ -1125,10 +1176,7 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
         )
 
     candidate_summary_paths = tuple(
-        str(summary_path)
-        for _, summary_path in sorted(
-            candidate_export_cache.values(), key=lambda cached: str(cached[1])
-        )
+        str(summary_path) for summary_path in sorted(candidate_export_cache.values(), key=str)
     )
     rolling_report = build_rolling_ranker_validation_report(
         learned_reports,
@@ -1173,6 +1221,186 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
     print(f"Candidate summary reports written: {len(candidate_summary_paths)}")
     print(f"Rolling ranker report written to: {written_report_path}")
     return 0
+
+
+def _handle_generate_learned_ranker_submission(args: argparse.Namespace) -> int:
+    """Handle the ``generate-learned-ranker-submission`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` when the generated submission passes validation; otherwise ``1``.
+    """
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    config = LinearRankerConfig(
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        l2=args.l2,
+        positive_weight=args.positive_weight,
+        max_auto_positive_weight=args.max_auto_positive_weight,
+    )
+    max_transaction_date = find_max_transaction_date(
+        iter_transaction_events(paths.raw_data_dir),
+        progress_interval=5_000_000,
+        progress_callback=lambda rows: print(
+            f"max-date transaction scan progress: {rows} rows",
+            flush=True,
+        ),
+    )
+    final_split = TemporalSplit(
+        cutoff=max_transaction_date + timedelta(days=1),
+        horizon_days=args.horizon_days,
+    )
+    train_split = previous_window_split(final_split)
+    train_candidate_path = args.train_candidate_output_path or paths.candidate_export_path(
+        cutoff=train_split.cutoff.isoformat(),
+        k=args.candidate_k,
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+    )
+    train_candidate_path = _resolve_path_under_root(paths, train_candidate_path)
+    train_candidate_report_path = (
+        args.train_candidate_report_path or paths.candidate_export_report_path(train_candidate_path)
+    )
+    train_candidate_report_path = _resolve_path_under_root(paths, train_candidate_report_path)
+    output_path = args.output_path or paths.learned_ranker_submission_path(
+        k=args.k,
+        candidate_k=args.candidate_k,
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        config_slug=_learned_ranker_config_slug(args),
+    )
+    output_path = _resolve_path_under_root(paths, output_path)
+    validation_report_path = args.validation_report_path or paths.submission_validation_report_path(
+        output_path
+    )
+    validation_report_path = _resolve_path_under_root(paths, validation_report_path)
+    report_path = args.report_path or paths.learned_ranker_submission_report_path(output_path)
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    target_customer_ids = load_submission_customer_ids_in_order(paths.raw_data_dir)
+    submission_customer_set = set(target_customer_ids)
+    print(
+        "Training learned ranker for final submission on latest label window: "
+        f"{train_split.cutoff.isoformat()}..{train_split.validation_end.isoformat()} exclusive",
+        flush=True,
+    )
+    train_candidate_summary_path = _write_cached_ranker_candidate_export(
+        cache={},
+        paths=paths,
+        split=train_split,
+        submission_customer_ids=submission_customer_set,
+        output_path=train_candidate_path,
+        args=args,
+    )
+    train_labels = _validation_labels_for_split(
+        raw_data_dir=paths.raw_data_dir,
+        split=train_split,
+        submission_customer_ids=submission_customer_set,
+        max_target_customers=None,
+    )
+    training_result = train_linear_ranker_from_csv(
+        candidate_path=train_candidate_path,
+        validation_labels=train_labels,
+        config=config,
+    )
+
+    print(
+        "Generating final-data learned-ranker predictions for "
+        f"{len(target_customer_ids)} customers. include_co_visitation={not args.no_co_visitation}",
+        flush=True,
+    )
+    submission = build_linear_ranker_submission_predictions(
+        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        split=final_split,
+        target_customer_ids=target_customer_ids,
+        model=training_result.model,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        popularity_lookback_days=args.popularity_lookback_days,
+        include_co_visitation=not args.no_co_visitation,
+        co_visitation_max_history_items=args.co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        max_transaction_date=max_transaction_date,
+        transaction_progress_interval=5_000_000,
+        transaction_progress_callback=lambda phase, rows: print(
+            f"{phase} transaction scan progress: {rows} rows",
+            flush=True,
+        ),
+        status_callback=lambda message: print(f"Final source build: {message}", flush=True),
+        progress_interval=100_000,
+        progress_callback=lambda completed, total: print(
+            f"Final scoring progress: {completed}/{total} customers",
+            flush=True,
+        ),
+    )
+    written_submission_path = write_submission_file(
+        predictions_by_customer=submission.predictions,
+        customer_ids=target_customer_ids,
+        path=output_path,
+        max_predictions=args.k,
+    )
+    validation_result = validate_submission_file(
+        submission_path=written_submission_path,
+        expected_customer_ids=submission_customer_set,
+        valid_article_ids=load_article_ids(paths.raw_data_dir),
+        max_predictions=args.k,
+        require_full_length=True,
+    )
+    written_validation_report_path = write_submission_validation_report(
+        validation_result,
+        validation_report_path,
+    )
+    report = build_learned_linear_ranker_submission_report(
+        train_split=train_split,
+        final_split=final_split,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        popularity_lookback_days=args.popularity_lookback_days,
+        include_co_visitation=not args.no_co_visitation,
+        co_visitation_max_history_items=args.co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        config=config,
+        model=training_result.model,
+        training=training_result.summary,
+        submission=submission,
+        submission_path=written_submission_path,
+        validation_report_path=written_validation_report_path,
+        validation=validation_result,
+    )
+    written_report_path = write_learned_linear_ranker_submission_report(report, report_path)
+
+    print(f"Max transaction date: {max_transaction_date.isoformat()}")
+    print(f"Final training cutoff: {final_split.cutoff.isoformat()}")
+    print(f"Training pairs: {training_result.summary.unique_candidate_pairs}")
+    print(f"Training positives: {training_result.summary.positive_pairs}")
+    print(f"Prediction target customers: {submission.diagnostics.target_customers}")
+    print(
+        "Full-length prediction coverage: "
+        f"{submission.diagnostics.customers_with_full_length_predictions}/"
+        f"{submission.diagnostics.target_customers}"
+    )
+    print(f"Duplicate prediction rows: {submission.diagnostics.duplicate_prediction_rows}")
+    print(f"Train candidate summary: {train_candidate_summary_path}")
+    print(f"Submission written to: {written_submission_path}")
+    print(f"Submission valid: {validation_result.valid}")
+    print(f"Validation report written to: {written_validation_report_path}")
+    print(f"Learned-ranker submission report written to: {written_report_path}")
+    for failure in validation_result.failures:
+        print(f"- {failure}")
+    return 0 if validation_result.valid else 1
 
 
 def _resolve_report_path(paths: ProjectPaths, report_path: Path | None) -> Path:
@@ -1238,19 +1466,19 @@ def _ranker_candidate_export_path(
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
-        max_target_customers=args.max_target_customers,
+        max_target_customers=getattr(args, "max_target_customers", None),
     )
     return _resolve_path_under_root(paths, candidate_path)
 
 
 def _write_cached_ranker_candidate_export(
-    cache: dict[Path, tuple[CandidateExportSummary, Path]],
+    cache: dict[Path, Path],
     paths: ProjectPaths,
     split: TemporalSplit,
     submission_customer_ids: set[str],
     output_path: Path,
     args: argparse.Namespace,
-) -> tuple[CandidateExportSummary, Path]:
+) -> Path:
     """Write or reuse a candidate export and its JSON summary.
 
     Args:
@@ -1262,12 +1490,19 @@ def _write_cached_ranker_candidate_export(
         args: Parsed ranker command arguments.
 
     Returns:
-        Candidate export summary and written JSON summary path.
+        Written JSON summary path.
     """
 
     cached = cache.get(output_path)
     if cached is not None:
         return cached
+
+    candidate_report_path = _resolve_path_under_root(
+        paths, paths.candidate_export_report_path(output_path)
+    )
+    if output_path.exists() and candidate_report_path.exists():
+        cache[output_path] = candidate_report_path
+        return candidate_report_path
 
     summary = write_validation_candidate_export(
         transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
@@ -1279,15 +1514,11 @@ def _write_cached_ranker_candidate_export(
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
-        max_target_customers=args.max_target_customers,
-    )
-    candidate_report_path = _resolve_path_under_root(
-        paths, paths.candidate_export_report_path(output_path)
+        max_target_customers=getattr(args, "max_target_customers", None),
     )
     written_report_path = write_candidate_export_summary(summary, candidate_report_path)
-    result = (summary, written_report_path)
-    cache[output_path] = result
-    return result
+    cache[output_path] = written_report_path
+    return written_report_path
 
 
 def _cached_validation_labels_for_split(
