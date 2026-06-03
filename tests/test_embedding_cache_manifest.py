@@ -7,6 +7,7 @@ import pytest
 from hm_recsys.embeddings.cache_manifest import (
     ArticleEmbeddingCacheManifest,
     build_article_embedding_cache_manifest,
+    read_article_embedding_cache_manifest,
     write_article_embedding_cache_manifest,
 )
 
@@ -53,6 +54,7 @@ def test_write_article_embedding_cache_manifest_writes_json(tmp_path: Path) -> N
     report = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert report["provider_name"] == "openclip"
     assert report["manifest_path"] == str(manifest_path.resolve())
+    assert read_article_embedding_cache_manifest(manifest_path) == written
 
 
 def test_article_embedding_cache_manifest_rejects_invalid_schema(tmp_path: Path) -> None:
