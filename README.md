@@ -136,6 +136,22 @@ image pixels. It writes ignored artifacts under:
 artifacts/multimodal/image-inventory/
 ```
 
+Export encoder-ready article content records for open-source text/image models:
+
+```bash
+make article-content-export
+```
+
+This writes normalized article text fields, combined text prompts, and canonical
+local image-path availability for each `article_id` without loading image pixels
+or requiring heavy ML dependencies. The intended next encoder providers are
+open-source FashionCLIP first, with OpenCLIP and SigLIP/SigLIP2 as challengers.
+Generated records and reports are local-only under:
+
+```text
+artifacts/multimodal/article-content/
+```
+
 Summarize a leakage-safe last-week validation split:
 
 ```bash
