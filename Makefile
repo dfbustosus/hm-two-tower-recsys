@@ -37,10 +37,19 @@ ROLLING_RANKER_NO_CO_VISITATION ?=
 TWO_TOWER_NEGATIVES_PER_POSITIVE ?= 1
 TWO_TOWER_SEED ?= 42
 TWO_TOWER_MAX_POSITIVE_EXAMPLES ?= 100000
+ARTICLE_EMBEDDING_PROVIDER ?= hf-clip
+ARTICLE_EMBEDDING_MODEL_ID ?= patrickjohncyh/fashion-clip
+ARTICLE_EMBEDDING_MODEL_REVISION ?= main
+ARTICLE_EMBEDDING_KIND ?= multimodal
+ARTICLE_EMBEDDING_BATCH_SIZE ?= 32
+ARTICLE_EMBEDDING_MAX_ARTICLES ?= 100
+CONTENT_SIMILARITY_MANIFEST ?= models/embeddings/articles/hf-clip_patrickjohncyh_fashion-clip_main/multimodal_manifest.json
+CONTENT_SIMILARITY_SOURCE ?= multimodal_similarity
+CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS ?= 1000
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline learned-ranker-baseline rolling-ranker-validation learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline learned-ranker-baseline rolling-ranker-validation learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -61,6 +70,8 @@ help:
 	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
 	@printf "  make image-inventory  Map articles to local images and write ignored reports\n\n"
 	@printf "  make article-content-export  Export article text/image paths for encoders\n\n"
+	@printf "  make article-embeddings  Generate optional open-source article embeddings\n\n"
+	@printf "  make content-similarity-diagnostics CUTOFF=YYYY-MM-DD  Evaluate cached embeddings\n\n"
 	@printf "Validation/submission:\n"
 	@printf "  make temporal-split CUTOFF=YYYY-MM-DD  Summarize a temporal split\n"
 	@printf "  make validate-submission SUBMISSION=path/to.csv  Validate a submission CSV\n"
@@ -150,6 +161,21 @@ image-inventory: venv
 
 article-content-export: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli export-article-content
+
+article-embeddings: venv
+	@extra_args=""; \
+	if [[ -n "$(ARTICLE_EMBEDDING_MAX_ARTICLES)" ]]; then \
+		extra_args="$$extra_args --max-articles $(ARTICLE_EMBEDDING_MAX_ARTICLES)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli generate-article-embeddings --provider "$(ARTICLE_EMBEDDING_PROVIDER)" --model-id "$(ARTICLE_EMBEDDING_MODEL_ID)" --model-revision "$(ARTICLE_EMBEDDING_MODEL_REVISION)" --embedding-kind "$(ARTICLE_EMBEDDING_KIND)" --batch-size "$(ARTICLE_EMBEDDING_BATCH_SIZE)" $$extra_args
+
+content-similarity-diagnostics: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make content-similarity-diagnostics CUTOFF=2020-09-16\n"; exit 2; fi
+	@extra_args=""; \
+	if [[ -n "$(CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli content-similarity-diagnostics --cutoff "$(CUTOFF)" --manifest-path "$(CONTENT_SIMILARITY_MANIFEST)" --source-name "$(CONTENT_SIMILARITY_SOURCE)" --evaluation-ks 12 50 100 $$extra_args
 
 temporal-split: venv
 	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make temporal-split CUTOFF=2020-09-16\n"; exit 2; fi
