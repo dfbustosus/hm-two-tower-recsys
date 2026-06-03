@@ -97,6 +97,18 @@ Embedding contracts
 .. automodule:: hm_recsys.embeddings.contracts
    :members:
 
+Article content export
+----------------------
+
+.. automodule:: hm_recsys.embeddings.article_content
+   :members:
+
+Embedding cache manifests
+-------------------------
+
+.. automodule:: hm_recsys.embeddings.cache_manifest
+   :members:
+
 Article image inventory
 -----------------------
 
