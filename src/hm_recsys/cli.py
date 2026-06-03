@@ -14,6 +14,7 @@ from hm_recsys.data.io import (
     load_submission_customer_ids,
     load_submission_customer_ids_in_order,
 )
+from hm_recsys.embeddings.article_content import write_article_content_export
 from hm_recsys.embeddings.image_inventory import write_article_image_inventory
 from hm_recsys.evaluation.submission import (
     validate_submission_file,
@@ -510,6 +511,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum missing/extra/malformed examples retained in the JSON report.",
     )
     image_inventory_parser.set_defaults(handler=_handle_inventory_article_images)
+
+    article_content_parser = subparsers.add_parser(
+        "export-article-content",
+        help="Export article text fields and image paths for open-source embedding providers.",
+    )
+    article_content_parser.add_argument("--project-root", type=Path, default=None)
+    article_content_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    article_content_parser.add_argument("--output-path", type=Path, default=None)
+    article_content_parser.add_argument("--report-path", type=Path, default=None)
+    article_content_parser.add_argument(
+        "--max-examples",
+        type=int,
+        default=10,
+        help="Maximum missing-image/empty-text examples retained in the JSON report.",
+    )
+    article_content_parser.set_defaults(handler=_handle_export_article_content)
     return parser
 
 
@@ -1580,6 +1597,44 @@ def _handle_inventory_article_images(args: argparse.Namespace) -> int:
     print(f"Manifest CSV written to: {summary.manifest_path}")
     print(f"Summary report written to: {summary.report_path}")
     return 0 if summary.valid else 1
+
+
+def _handle_export_article_content(args: argparse.Namespace) -> int:
+    """Handle the ``export-article-content`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` after writing article content inputs and diagnostics.
+    """
+
+    paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
+    output_path = args.output_path or paths.article_content_export_path
+    output_path = _resolve_path_under_root(paths, output_path)
+    report_path = args.report_path or paths.article_content_export_report_path
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    print(
+        "Exporting article content for embedding providers: "
+        f"raw_data_dir={paths.raw_data_dir}, max_examples={args.max_examples}",
+        flush=True,
+    )
+    summary = write_article_content_export(
+        raw_data_dir=paths.raw_data_dir,
+        output_path=output_path,
+        report_path=report_path,
+        max_examples=args.max_examples,
+    )
+
+    print(f"Articles: {summary.article_count}")
+    print(f"Records written: {summary.records_written}")
+    print(f"Image-available records: {summary.image_available_count}")
+    print(f"Image-missing records: {summary.image_missing_count}")
+    print(f"Empty combined-text records: {summary.empty_combined_text_count}")
+    print(f"Content CSV written to: {summary.output_path}")
+    print(f"Summary report written to: {summary.report_path}")
+    return 0
 
 
 def _resolve_report_path(paths: ProjectPaths, report_path: Path | None) -> Path:
