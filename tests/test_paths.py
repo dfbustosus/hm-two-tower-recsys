@@ -64,6 +64,110 @@ def test_project_paths_include_learned_ranker_submission_locations(tmp_path: Pat
     )
 
 
+def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
+    paths = ProjectPaths.from_root(tmp_path)
+    manifest_path = (
+        tmp_path
+        / "models"
+        / "embeddings"
+        / "articles"
+        / "hf-clip_fashion-clip_main"
+        / "multimodal_manifest.json"
+    )
+
+    candidate_path = paths.candidate_export_path(
+        cutoff="2020-09-16",
+        k=100,
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        content_similarity_source_name="multimodal_similarity",
+        content_similarity_manifest_path=manifest_path,
+        max_target_customers=1000,
+    )
+    ranker_report_path = paths.ranker_baseline_report_path(
+        cutoff="2020-09-16",
+        k=12,
+        candidate_k=100,
+        max_target_customers=1000,
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        content_similarity_source_name="multimodal_similarity",
+        content_similarity_manifest_path=manifest_path,
+    )
+    learned_report_path = paths.learned_ranker_baseline_report_path(
+        train_cutoff="2020-09-09",
+        evaluation_cutoff="2020-09-16",
+        k=12,
+        candidate_k=100,
+        max_target_customers=1000,
+        config_slug="e3_lr0p01",
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        content_similarity_source_name="multimodal_similarity",
+        content_similarity_manifest_path=manifest_path,
+    )
+
+    assert "content_multimodal_similarity" in candidate_path.stem
+    assert "content_multimodal_similarity" in ranker_report_path.stem
+    assert "content_multimodal_similarity" in learned_report_path.stem
+    assert "hf-clip_fashion-clip" in candidate_path.stem
+    assert "lookback_7" in ranker_report_path.stem
+    assert "covis_h8_n100" in learned_report_path.stem
+
+    prior_candidate_path = paths.candidate_export_path(
+        cutoff="2020-09-16",
+        k=100,
+        lookback_days=7,
+        content_similarity_source_name="multimodal_similarity_popularity_prior",
+        content_similarity_manifest_path=manifest_path,
+        content_similarity_popularity_prior_weight=0.3,
+        content_similarity_popularity_lookback_days=30,
+        content_similarity_candidate_pool_size=200,
+    )
+    assert "popw0p3" in prior_candidate_path.stem
+    assert "poplookback30" in prior_candidate_path.stem
+    assert "pool200" in prior_candidate_path.stem
+
+
+def test_content_similarity_artifact_names_stay_compact_for_long_manifests(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
+    paths = ProjectPaths.from_root(tmp_path)
+    long_manifest_path = (
+        "models/embeddings/articles/"
+        "hf-clip_patrickjohncyh_fashion-clip_main_article_content_priority_cutoff_"
+        "2020-09-16_lookback_30_first_5000_articles_first_1000_articles/"
+        "multimodal_manifest.json"
+    )
+
+    candidate_path = paths.candidate_export_path(
+        cutoff="2020-09-09",
+        k=100,
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        content_similarity_source_name="multimodal_similarity",
+        content_similarity_manifest_path=long_manifest_path,
+        max_target_customers=1000,
+    )
+    diagnostics_path = paths.content_similarity_diagnostics_report_path(
+        cutoff="2020-09-16",
+        source_name="multimodal_similarity",
+        manifest_path=long_manifest_path,
+        max_target_customers=1000,
+    )
+
+    assert len(candidate_path.name) < 255
+    assert len(diagnostics_path.name) < 255
+    assert "content_multimodal_similarity" in candidate_path.stem
+    assert "hf-clip_patrickjohncyh" in candidate_path.stem
+
+
 def test_project_paths_include_two_tower_export_locations(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
     paths = ProjectPaths.from_root(tmp_path)
@@ -110,6 +214,25 @@ def test_project_paths_include_article_content_and_embedding_cache_locations(
     assert paths.article_content_export_report_path == (
         tmp_path / "artifacts" / "multimodal" / "article-content" / "article_content.json"
     )
+    subset_content_path = paths.article_content_export_path_for_config(
+        max_articles=1000,
+        priority_cutoff="2020-09-16",
+        priority_lookback_days=30,
+    )
+    assert subset_content_path == (
+        tmp_path
+        / "artifacts"
+        / "multimodal"
+        / "article-content"
+        / "article_content_priority_cutoff_2020-09-16_lookback_30_first_1000_articles.csv"
+    )
+    assert paths.article_content_export_report_path_for_path(subset_content_path) == (
+        tmp_path
+        / "artifacts"
+        / "multimodal"
+        / "article-content"
+        / "article_content_priority_cutoff_2020-09-16_lookback_30_first_1000_articles.json"
+    )
     assert paths.article_embedding_cache_dir("FashionCLIP/v1") == (
         tmp_path / "models" / "embeddings" / "articles" / "FashionCLIP_v1"
     )
@@ -140,6 +263,19 @@ def test_project_paths_include_article_content_and_embedding_cache_locations(
         / "multimodal"
         / "content-similarity"
         / "content_similarity_multimodal_similarity_cutoff_2020-09-16_first_100_customers.json"
+    )
+    assert paths.content_similarity_diagnostics_report_path(
+        "2020-09-16",
+        "multimodal_similarity",
+        manifest_path="models/embeddings/articles/provider_subset/multimodal_manifest.json",
+        max_target_customers=100,
+    ) == (
+        tmp_path
+        / "artifacts"
+        / "multimodal"
+        / "content-similarity"
+        / "content_similarity_multimodal_similarity_cutoff_2020-09-16_"
+        "provider_subset_2f43e39e_first_100_customers.json"
     )
     with pytest.raises(ValueError, match="provider_slug"):
         paths.article_embedding_cache_dir("")
