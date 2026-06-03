@@ -13,7 +13,10 @@ temporal split summaries, MAP@12/recall metrics, submission validation,
 repeat-plus-popularity baselines, candidate-source diagnostics, co-visitation
 retrieval, ranker-ready candidate exports, deterministic ranking, learned linear
 ranking, rolling-window ranker validation, and learned-ranker submission
-generation.
+generation. The first two-tower challenger foundation now exports cutoff-safe
+training examples, stable ID mappings, and deterministic random negatives. The
+multimodal foundation now inventories local article images without loading image
+pixels so image/text retrieval sources can be added with measured coverage.
 
 ## Project structure
 
@@ -25,7 +28,7 @@ generation.
   - `ranking/`: deterministic, learned linear, rolling-window evaluation, and ranker submission generation.
   - `embeddings/`: provider contracts and factories for text, image, and multimodal embeddings.
   - `indexing/`: vector-index contracts and factories for retrieval pipelines.
-  - `training/`: training configuration contracts, including two-tower retrieval.
+  - `training/`: training configuration contracts and two-tower example export.
   - `infrastructure/`: path resolution and local artifact locations.
   - `tools/`: repository-maintenance utilities used by local checks and CI.
 - `tests/` contains synthetic unit tests for contracts and edge cases.
@@ -33,6 +36,8 @@ generation.
 - `data/`, `artifacts/`, `models/`, and `submissions/` are local-only ignored paths.
 
 The multi-stage architecture plan is documented in [`docs/architecture.md`](docs/architecture.md).
+The image-aware/two-tower challenger design is documented in
+[`docs/multimodal-two-tower-architecture.md`](docs/multimodal-two-tower-architecture.md).
 
 ## Local data and artifact policy
 
@@ -115,6 +120,20 @@ This writes an ignored JSON report to:
 
 ```text
 artifacts/data-contract/data_contract_report.json
+```
+
+Inventory local article images before building multimodal retrieval sources:
+
+```bash
+make image-inventory
+```
+
+This maps each `articles.csv` `article_id` to the expected local Kaggle image
+path, reports missing images and malformed/extra image files, and does not load
+image pixels. It writes ignored artifacts under:
+
+```text
+artifacts/multimodal/image-inventory/
 ```
 
 Summarize a leakage-safe last-week validation split:
@@ -303,8 +322,37 @@ and writes a reproducibility report under:
 artifacts/ranker-submissions/
 ```
 
+Export cutoff-safe two-tower training examples and stable ID mappings for a
+bounded smoke run:
+
+```bash
+make two-tower-example-export CUTOFF=2020-09-16
+```
+
+By default this exports the first `100000` unique pre-cutoff positive pairs, one
+deterministic random negative per positive, and article/customer mapping CSVs.
+Negatives are sampled only from articles known before the cutoff and exclude all
+pre-cutoff positives for the selected customer. To change the cap or intentionally
+run a full export:
+
+```bash
+make two-tower-example-export \
+  CUTOFF=2020-09-16 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=10000
+
+make two-tower-example-export \
+  CUTOFF=2020-09-16 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=
+```
+
+Artifacts are written under ignored local storage:
+
+```text
+artifacts/two-tower/
+```
+
 ## Next implementation gate
 
-The next code milestone is a two-tower retrieval challenger that must improve
-candidate recall or downstream MAP@12 after comparison with the deterministic
-and learned ranker baselines.
+The next code milestone is a minimal two-tower training/evaluation smoke run
+that consumes the exported examples, retrieves candidates, and must improve
+candidate recall or downstream MAP@12 before promotion.
