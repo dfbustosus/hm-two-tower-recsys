@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import csv
 import json
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from hm_recsys.core.ids import is_article_id
-from hm_recsys.data.io import CsvValueError, iter_csv_rows
+from hm_recsys.data.io import CsvValueError, TransactionEvent, iter_csv_rows
 from hm_recsys.embeddings.contracts import ArticleEmbeddingInput
 from hm_recsys.embeddings.image_inventory import build_article_image_inventory
 
@@ -111,6 +112,8 @@ class ArticleContentExportSummary:
     empty_combined_text_count: int
     missing_image_examples: tuple[str, ...]
     empty_text_examples: tuple[str, ...]
+    max_articles: int | None = None
+    priority_article_count: int | None = None
 
 
 def iter_article_content_records(
@@ -118,8 +121,10 @@ def iter_article_content_records(
     *,
     text_field_names: Sequence[str] = DEFAULT_ARTICLE_TEXT_FIELD_NAMES,
     max_examples: int = 10,
+    article_id_order: Sequence[str] | None = None,
+    max_articles: int | None = None,
 ) -> Iterable[ArticleContentRecord]:
-    """Yield deterministic article content records in ``articles.csv`` order.
+    """Yield deterministic article content records for embedding providers.
 
     Args:
         raw_data_dir: Directory containing H&M ``articles.csv`` and optional
@@ -128,22 +133,104 @@ def iter_article_content_records(
             provider input and combined prompt.
         max_examples: Maximum issue examples retained internally by the image
             inventory scan. This does not affect yielded records.
+        article_id_order: Optional priority order used before falling back to
+            ``articles.csv`` order for articles not present in the priority list.
+        max_articles: Optional maximum number of records to yield after applying
+            the priority order.
 
     Yields:
-        Article content records preserving string IDs and article-file order.
+        Article content records preserving string IDs. Without ``article_id_order``
+        records follow article-file order. With a priority order, known priority
+        IDs are emitted first, then remaining articles in file order.
 
     Raises:
-        ValueError: If text fields are empty or ``max_examples`` is negative.
+        ValueError: If text fields are empty or numeric limits are invalid.
         CsvSchemaError: If required article columns are missing.
         CsvValueError: If an article ID is malformed.
     """
 
     field_names = _validate_text_field_names(text_field_names)
+    if max_examples < 0:
+        raise ValueError("max_examples must be non-negative")
+    if max_articles is not None and max_articles <= 0:
+        raise ValueError("max_articles must be positive when provided")
     raw_dir = Path(raw_data_dir).expanduser().resolve()
+    records = tuple(
+        _iter_article_content_records_in_articles_order(raw_dir, field_names, max_examples)
+    )
+    ordered_records = _apply_article_priority_order(records, article_id_order)
+    for yielded, record in enumerate(ordered_records, start=1):
+        if max_articles is not None and yielded > max_articles:
+            break
+        yield record
+
+
+def build_article_popularity_priority(
+    transactions: Iterable[TransactionEvent],
+    *,
+    cutoff: date | None = None,
+    lookback_days: int | None = None,
+) -> tuple[str, ...]:
+    """Rank article IDs by leakage-safe transaction popularity.
+
+    This is intended for bounded embedding-cache experiments: if only N article
+    embeddings can be generated locally, prioritize items that were actually
+    visible before the validation cutoff instead of taking the first N rows from
+    ``articles.csv``.  Validation target-window transactions must never be passed
+    through this ranker, so ``cutoff`` is exclusive when provided.
+
+    Args:
+        transactions: Transaction events preserving string article IDs.
+        cutoff: Optional exclusive cutoff. Events on or after this date are
+            ignored.
+        lookback_days: Optional lookback ending at ``cutoff``. Requires
+            ``cutoff`` so the window is auditable.
+
+    Returns:
+        Article IDs sorted by descending purchase count, most recent pre-cutoff
+        purchase date, then article ID for deterministic ties.
+
+    Raises:
+        ValueError: If ``lookback_days`` is invalid or supplied without cutoff.
+    """
+
+    if lookback_days is not None and lookback_days <= 0:
+        raise ValueError("lookback_days must be positive when provided")
+    if lookback_days is not None and cutoff is None:
+        raise ValueError("cutoff is required when lookback_days is provided")
+
+    window_start = cutoff - timedelta(days=lookback_days) if cutoff and lookback_days else None
+    counts: Counter[str] = Counter()
+    latest_dates: dict[str, date] = {}
+    for event in transactions:
+        if cutoff is not None and event.t_dat >= cutoff:
+            continue
+        if window_start is not None and event.t_dat < window_start:
+            continue
+        counts[event.article_id] += 1
+        previous_latest = latest_dates.get(event.article_id)
+        if previous_latest is None or event.t_dat > previous_latest:
+            latest_dates[event.article_id] = event.t_dat
+
+    return tuple(
+        article_id
+        for article_id, _ in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], -latest_dates[item[0]].toordinal(), item[0]),
+        )
+    )
+
+
+def _iter_article_content_records_in_articles_order(
+    raw_dir: Path,
+    field_names: Sequence[str],
+    max_examples: int,
+) -> Iterable[ArticleContentRecord]:
+    """Yield content records in raw ``articles.csv`` order."""
+
     articles_path = raw_dir / "articles.csv"
     image_inventory = build_article_image_inventory(raw_dir, max_examples=max_examples)
     image_by_article_id = {record.article_id: record for record in image_inventory.records}
-
     required_columns = ("article_id", *field_names)
     for line_number, row in enumerate(iter_csv_rows(articles_path, required_columns), start=2):
         article_id = row["article_id"]
@@ -160,6 +247,29 @@ def iter_article_content_records(
             image_relative_path=image_record.image_relative_path,
             image_exists=image_record.image_exists,
         )
+
+
+def _apply_article_priority_order(
+    records: Sequence[ArticleContentRecord],
+    article_id_order: Sequence[str] | None,
+) -> tuple[ArticleContentRecord, ...]:
+    """Apply an optional article priority order while retaining all records."""
+
+    if article_id_order is None:
+        return tuple(records)
+
+    records_by_article_id = {record.article_id: record for record in records}
+    ordered: list[ArticleContentRecord] = []
+    seen: set[str] = set()
+    for article_id in article_id_order:
+        if article_id in seen:
+            continue
+        seen.add(article_id)
+        record = records_by_article_id.get(article_id)
+        if record is not None:
+            ordered.append(record)
+    ordered.extend(record for record in records if record.article_id not in seen)
+    return tuple(ordered)
 
 
 def combine_article_text_fields(text_fields: Mapping[str, str]) -> str:
@@ -189,6 +299,8 @@ def write_article_content_export(
     report_path: Path | str,
     text_field_names: Sequence[str] = DEFAULT_ARTICLE_TEXT_FIELD_NAMES,
     max_examples: int = 10,
+    article_id_order: Sequence[str] | None = None,
+    max_articles: int | None = None,
 ) -> ArticleContentExportSummary:
     """Write article content CSV plus a JSON summary report.
 
@@ -199,6 +311,10 @@ def write_article_content_export(
         report_path: Destination JSON report path.
         text_field_names: Article CSV columns to include in encoder inputs.
         max_examples: Maximum missing-image/empty-text examples retained.
+        article_id_order: Optional priority order emitted before article-file
+            order, useful for bounded popularity-focused embedding caches.
+        max_articles: Optional maximum number of records to write after applying
+            the priority order.
 
     Returns:
         Export summary with resolved artifact paths and coverage counts.
@@ -206,6 +322,8 @@ def write_article_content_export(
 
     if max_examples < 0:
         raise ValueError("max_examples must be non-negative")
+    if max_articles is not None and max_articles <= 0:
+        raise ValueError("max_articles must be positive when provided")
     field_names = _validate_text_field_names(text_field_names)
     raw_dir = Path(raw_data_dir).expanduser().resolve()
     resolved_output_path = Path(output_path).expanduser().resolve()
@@ -226,6 +344,8 @@ def write_article_content_export(
             raw_dir,
             text_field_names=field_names,
             max_examples=max_examples,
+            article_id_order=article_id_order,
+            max_articles=max_articles,
         ):
             article_count += 1
             if record.image_exists:
@@ -252,6 +372,8 @@ def write_article_content_export(
         empty_combined_text_count=empty_combined_text_count,
         missing_image_examples=tuple(missing_image_examples),
         empty_text_examples=tuple(empty_text_examples),
+        max_articles=max_articles,
+        priority_article_count=(len(article_id_order) if article_id_order is not None else None),
     )
     return write_article_content_export_report(summary, resolved_report_path)
 
