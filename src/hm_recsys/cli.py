@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -15,7 +15,10 @@ from hm_recsys.data.io import (
     load_submission_customer_ids,
     load_submission_customer_ids_in_order,
 )
-from hm_recsys.embeddings.article_content import write_article_content_export
+from hm_recsys.embeddings.article_content import (
+    build_article_popularity_priority,
+    write_article_content_export,
+)
 from hm_recsys.embeddings.cache_manifest import EmbeddingCacheKind
 from hm_recsys.embeddings.generation import (
     ArticleEmbeddingCacheWriteConfig,
@@ -80,7 +83,10 @@ from hm_recsys.retrieval.content_similarity_diagnostics import (
     evaluate_cached_content_similarity,
     write_content_similarity_diagnostics_report,
 )
-from hm_recsys.retrieval.source_names import MULTIMODAL_SIMILARITY_SOURCE
+from hm_recsys.retrieval.source_names import (
+    MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+    MULTIMODAL_SIMILARITY_SOURCE,
+)
 from hm_recsys.training.two_tower_export import (
     TwoTowerExampleExportConfig,
     write_two_tower_example_export,
@@ -266,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for smoke exports.",
     )
+    _add_content_similarity_candidate_arguments(candidate_export_parser)
     candidate_export_parser.add_argument("--project-root", type=Path, default=None)
     candidate_export_parser.add_argument("--raw-data-dir", type=Path, default=None)
     candidate_export_parser.add_argument("--output-path", type=Path, default=None)
@@ -312,6 +319,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for smoke evaluations.",
     )
+    _add_content_similarity_candidate_arguments(ranker_parser)
     ranker_parser.add_argument("--project-root", type=Path, default=None)
     ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
     ranker_parser.add_argument("--candidate-output-path", type=Path, default=None)
@@ -369,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to train and eval windows.",
     )
+    _add_content_similarity_candidate_arguments(learned_ranker_parser)
     learned_ranker_parser.add_argument("--project-root", type=Path, default=None)
     learned_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
     learned_ranker_parser.add_argument("--train-candidate-output-path", type=Path, default=None)
@@ -426,6 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to all rolling windows.",
     )
+    _add_content_similarity_candidate_arguments(rolling_ranker_parser)
     rolling_ranker_parser.add_argument("--project-root", type=Path, default=None)
     rolling_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
     rolling_ranker_parser.add_argument("--report-path", type=Path, default=None)
@@ -533,6 +543,23 @@ def build_parser() -> argparse.ArgumentParser:
     article_content_parser.add_argument("--output-path", type=Path, default=None)
     article_content_parser.add_argument("--report-path", type=Path, default=None)
     article_content_parser.add_argument(
+        "--max-articles",
+        type=int,
+        default=None,
+        help="Optional cap after applying article priority order.",
+    )
+    article_content_parser.add_argument(
+        "--priority-cutoff",
+        default=None,
+        help="Exclusive YYYY-MM-DD cutoff for transaction-popularity article ordering.",
+    )
+    article_content_parser.add_argument(
+        "--priority-lookback-days",
+        type=int,
+        default=None,
+        help="Optional popularity lookback ending at --priority-cutoff.",
+    )
+    article_content_parser.add_argument(
         "--max-examples",
         type=int,
         default=10,
@@ -611,6 +638,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_HISTORY_ITEMS,
     )
     content_similarity_parser.add_argument(
+        "--popularity-prior-weight",
+        type=float,
+        default=0.0,
+        help="Blend weight for pre-cutoff article popularity when reranking content candidates.",
+    )
+    content_similarity_parser.add_argument(
+        "--popularity-lookback-days",
+        type=int,
+        default=None,
+        help="Optional pre-cutoff popularity-prior lookback window.",
+    )
+    content_similarity_parser.add_argument(
+        "--candidate-pool-size",
+        type=int,
+        default=None,
+        help="Optional content neighbor pool size before popularity-prior reranking.",
+    )
+    content_similarity_parser.add_argument(
         "--include-history",
         action="store_true",
         help="Do not filter articles already present in the customer's pre-cutoff history.",
@@ -621,6 +666,51 @@ def build_parser() -> argparse.ArgumentParser:
     content_similarity_parser.add_argument("--report-path", type=Path, default=None)
     content_similarity_parser.set_defaults(handler=_handle_content_similarity_diagnostics)
     return parser
+
+
+def _add_content_similarity_candidate_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional cached content-similarity candidate-source arguments."""
+
+    parser.add_argument(
+        "--content-similarity-manifest-path",
+        type=Path,
+        default=None,
+        help="Optional cached article-embedding manifest for content candidate rows.",
+    )
+    parser.add_argument(
+        "--content-similarity-source-name",
+        default=MULTIMODAL_SIMILARITY_SOURCE,
+        help="Source name emitted for cached content-similarity candidates.",
+    )
+    parser.add_argument(
+        "--content-similarity-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+        help="Recent unique history length for content query vectors.",
+    )
+    parser.add_argument(
+        "--content-similarity-popularity-prior-weight",
+        type=float,
+        default=0.0,
+        help="Blend weight for pre-cutoff article popularity in content reranking.",
+    )
+    parser.add_argument(
+        "--content-similarity-popularity-lookback-days",
+        type=int,
+        default=None,
+        help="Optional pre-cutoff popularity-prior lookback window for content reranking.",
+    )
+    parser.add_argument(
+        "--content-similarity-candidate-pool-size",
+        type=int,
+        default=None,
+        help="Optional content neighbor pool size before popularity-prior reranking.",
+    )
+    parser.add_argument(
+        "--include-content-history",
+        action="store_true",
+        help="Do not filter pre-cutoff history articles from content candidates.",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -898,6 +988,7 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
 
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    content_source_name = _effective_content_similarity_source_name(args)
     output_path = args.output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
         k=args.k,
@@ -908,11 +999,33 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
         max_target_customers=args.max_target_customers,
     )
     output_path = _resolve_path_under_root(paths, output_path)
     report_path = args.report_path or paths.candidate_export_report_path(output_path)
     report_path = _resolve_path_under_root(paths, report_path)
+    content_manifest_path = _resolve_optional_path_under_root(
+        paths, args.content_similarity_manifest_path
+    )
 
     summary = write_validation_candidate_export(
         transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
@@ -924,6 +1037,17 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        content_similarity_manifest_path=content_manifest_path,
+        content_similarity_source_name=content_source_name,
+        content_similarity_max_history_items=args.content_similarity_max_history_items,
+        content_similarity_exclude_history=not args.include_content_history,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+        ),
+        content_similarity_candidate_pool_size=args.content_similarity_candidate_pool_size,
         max_target_customers=args.max_target_customers,
     )
     written_report_path = write_candidate_export_summary(summary, report_path)
@@ -951,6 +1075,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
 
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    content_source_name = _effective_content_similarity_source_name(args)
     candidate_output_path = args.candidate_output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
         k=args.candidate_k,
@@ -961,6 +1086,25 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
         max_target_customers=args.max_target_customers,
     )
     candidate_output_path = _resolve_path_under_root(paths, candidate_output_path)
@@ -968,11 +1112,40 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         candidate_output_path
     )
     candidate_report_path = _resolve_path_under_root(paths, candidate_report_path)
+    content_manifest_path = _resolve_optional_path_under_root(
+        paths, args.content_similarity_manifest_path
+    )
     ranker_report_path = args.report_path or paths.ranker_baseline_report_path(
         cutoff=args.cutoff,
         k=args.k,
         candidate_k=args.candidate_k,
         max_target_customers=args.max_target_customers,
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
     )
     ranker_report_path = _resolve_path_under_root(paths, ranker_report_path)
 
@@ -987,6 +1160,17 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        content_similarity_manifest_path=content_manifest_path,
+        content_similarity_source_name=content_source_name,
+        content_similarity_max_history_items=args.content_similarity_max_history_items,
+        content_similarity_exclude_history=not args.include_content_history,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+        ),
+        content_similarity_candidate_pool_size=args.content_similarity_candidate_pool_size,
         max_target_customers=args.max_target_customers,
     )
     written_candidate_report_path = write_candidate_export_summary(
@@ -1041,6 +1225,7 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
 
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     evaluation_split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    content_source_name = _effective_content_similarity_source_name(args)
     train_split = (
         TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
         if args.train_cutoff is not None
@@ -1059,6 +1244,25 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
         max_target_customers=args.max_target_customers,
     )
     eval_candidate_path = args.eval_candidate_output_path or paths.candidate_export_path(
@@ -1070,6 +1274,25 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
         ),
         max_target_customers=args.max_target_customers,
     )
@@ -1083,6 +1306,9 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
     )
     train_candidate_report_path = _resolve_path_under_root(paths, train_candidate_report_path)
     eval_candidate_report_path = _resolve_path_under_root(paths, eval_candidate_report_path)
+    content_manifest_path = _resolve_optional_path_under_root(
+        paths, args.content_similarity_manifest_path
+    )
     report_path = args.report_path or paths.learned_ranker_baseline_report_path(
         train_cutoff=train_split.cutoff.isoformat(),
         evaluation_cutoff=args.cutoff,
@@ -1090,6 +1316,32 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         candidate_k=args.candidate_k,
         max_target_customers=args.max_target_customers,
         config_slug=_learned_ranker_config_slug(args),
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
     )
     report_path = _resolve_path_under_root(paths, report_path)
 
@@ -1117,6 +1369,17 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        content_similarity_manifest_path=content_manifest_path,
+        content_similarity_source_name=content_source_name,
+        content_similarity_max_history_items=args.content_similarity_max_history_items,
+        content_similarity_exclude_history=not args.include_content_history,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+        ),
+        content_similarity_candidate_pool_size=args.content_similarity_candidate_pool_size,
         max_target_customers=args.max_target_customers,
     )
     eval_export_summary = write_validation_candidate_export(
@@ -1129,6 +1392,17 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        content_similarity_manifest_path=content_manifest_path,
+        content_similarity_source_name=content_source_name,
+        content_similarity_max_history_items=args.content_similarity_max_history_items,
+        content_similarity_exclude_history=not args.include_content_history,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+        ),
+        content_similarity_candidate_pool_size=args.content_similarity_candidate_pool_size,
         max_target_customers=args.max_target_customers,
     )
     written_train_candidate_report_path = write_candidate_export_summary(
@@ -1202,6 +1476,7 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
 
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     cutoffs = tuple(args.cutoffs)
+    content_source_name = _effective_content_similarity_source_name(args)
     if len(set(cutoffs)) != len(cutoffs):
         raise ValueError("rolling evaluation cutoffs must be unique")
     if tuple(sorted(cutoffs)) != cutoffs:
@@ -1212,6 +1487,32 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
         candidate_k=args.candidate_k,
         max_target_customers=args.max_target_customers,
         config_slug=_learned_ranker_config_slug(args),
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
     )
     report_path = _resolve_path_under_root(paths, report_path)
 
@@ -1703,14 +2004,41 @@ def _handle_export_article_content(args: argparse.Namespace) -> int:
     """
 
     paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
-    output_path = args.output_path or paths.article_content_export_path
+    has_subset_config = (
+        args.max_articles is not None
+        or args.priority_cutoff is not None
+        or args.priority_lookback_days is not None
+    )
+    output_path = args.output_path or (
+        paths.article_content_export_path_for_config(
+            max_articles=args.max_articles,
+            priority_cutoff=args.priority_cutoff,
+            priority_lookback_days=args.priority_lookback_days,
+        )
+        if has_subset_config
+        else paths.article_content_export_path
+    )
     output_path = _resolve_path_under_root(paths, output_path)
-    report_path = args.report_path or paths.article_content_export_report_path
+    report_path = args.report_path or paths.article_content_export_report_path_for_path(output_path)
     report_path = _resolve_path_under_root(paths, report_path)
+    if args.priority_lookback_days is not None and args.priority_cutoff is None:
+        raise ValueError("--priority-cutoff is required with --priority-lookback-days")
+    priority_cutoff = date.fromisoformat(args.priority_cutoff) if args.priority_cutoff else None
+    article_id_order = (
+        build_article_popularity_priority(
+            iter_transaction_events(paths.raw_data_dir),
+            cutoff=priority_cutoff,
+            lookback_days=args.priority_lookback_days,
+        )
+        if priority_cutoff is not None
+        else None
+    )
 
     print(
         "Exporting article content for embedding providers: "
-        f"raw_data_dir={paths.raw_data_dir}, max_examples={args.max_examples}",
+        f"raw_data_dir={paths.raw_data_dir}, max_examples={args.max_examples}, "
+        f"max_articles={args.max_articles}, priority_cutoff={args.priority_cutoff}, "
+        f"priority_lookback_days={args.priority_lookback_days}",
         flush=True,
     )
     summary = write_article_content_export(
@@ -1718,10 +2046,13 @@ def _handle_export_article_content(args: argparse.Namespace) -> int:
         output_path=output_path,
         report_path=report_path,
         max_examples=args.max_examples,
+        article_id_order=article_id_order,
+        max_articles=args.max_articles,
     )
 
     print(f"Articles: {summary.article_count}")
     print(f"Records written: {summary.records_written}")
+    print(f"Priority articles: {summary.priority_article_count}")
     print(f"Image-available records: {summary.image_available_count}")
     print(f"Image-missing records: {summary.image_missing_count}")
     print(f"Empty combined-text records: {summary.empty_combined_text_count}")
@@ -1734,22 +2065,31 @@ def _handle_generate_article_embeddings(args: argparse.Namespace) -> int:
     """Handle the ``generate-article-embeddings`` subcommand."""
 
     paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
+    default_article_content_path = _resolve_path_under_root(
+        paths,
+        paths.article_content_export_path,
+    )
     article_content_path = args.article_content_path or paths.article_content_export_path
     article_content_path = _resolve_path_under_root(paths, article_content_path)
     provider_slug = f"{args.provider}_{args.model_id}_{args.model_revision}"
+    cache_provider_slug = provider_slug
+    if article_content_path != default_article_content_path:
+        cache_provider_slug = f"{cache_provider_slug}_{article_content_path.stem}"
+    if args.max_articles is not None:
+        cache_provider_slug = f"{cache_provider_slug}_first_{args.max_articles}_articles"
     embeddings_path = args.embeddings_path or paths.article_embedding_cache_embeddings_path(
-        provider_slug,
+        cache_provider_slug,
         args.embedding_kind,
         "jsonl",
     )
     embeddings_path = _resolve_path_under_root(paths, embeddings_path)
     article_mapping_path = args.article_mapping_path or paths.article_embedding_cache_mapping_path(
-        provider_slug,
+        cache_provider_slug,
         args.embedding_kind,
     )
     article_mapping_path = _resolve_path_under_root(paths, article_mapping_path)
     manifest_path = args.manifest_path or paths.article_embedding_cache_manifest_path(
-        provider_slug,
+        cache_provider_slug,
         args.embedding_kind,
     )
     manifest_path = _resolve_path_under_root(paths, manifest_path)
@@ -1810,9 +2150,14 @@ def _handle_content_similarity_diagnostics(args: argparse.Namespace) -> int:
     paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     manifest_path = _resolve_path_under_root(paths, args.manifest_path)
+    source_name = _effective_diagnostics_content_similarity_source_name(args)
     report_path = args.report_path or paths.content_similarity_diagnostics_report_path(
         cutoff=args.cutoff,
-        source_name=args.source_name,
+        source_name=source_name,
+        manifest_path=manifest_path,
+        popularity_prior_weight=args.popularity_prior_weight,
+        popularity_lookback_days=args.popularity_lookback_days,
+        candidate_pool_size=args.candidate_pool_size,
         max_target_customers=args.max_target_customers,
     )
     report_path = _resolve_path_under_root(paths, report_path)
@@ -1821,7 +2166,7 @@ def _handle_content_similarity_diagnostics(args: argparse.Namespace) -> int:
     print(
         "Evaluating cached content-similarity source: "
         f"cutoff={args.cutoff}, manifest={manifest_path}, "
-        f"source={args.source_name}, max_target_customers={args.max_target_customers}",
+        f"source={source_name}, max_target_customers={args.max_target_customers}",
         flush=True,
     )
     report = evaluate_cached_content_similarity(
@@ -1829,10 +2174,13 @@ def _handle_content_similarity_diagnostics(args: argparse.Namespace) -> int:
         split=split,
         submission_customer_ids=submission_customer_ids,
         manifest_path=manifest_path,
-        source_name=args.source_name,
+        source_name=source_name,
         evaluation_ks=tuple(args.evaluation_ks),
         max_history_items=args.max_history_items,
         exclude_history=not args.include_history,
+        popularity_prior_weight=args.popularity_prior_weight,
+        popularity_lookback_days=args.popularity_lookback_days,
+        candidate_pool_size=args.candidate_pool_size,
         max_target_customers=args.max_target_customers,
     )
     written_report_path = write_content_similarity_diagnostics_report(report, report_path)
@@ -1888,6 +2236,14 @@ def _resolve_path_under_root(paths: ProjectPaths, path: Path) -> Path:
     return paths.root / expanded
 
 
+def _resolve_optional_path_under_root(paths: ProjectPaths, path: Path | None) -> Path | None:
+    """Resolve an optional CLI path against the project root."""
+
+    if path is None:
+        return None
+    return _resolve_path_under_root(paths, path)
+
+
 def _ranker_candidate_export_path(
     paths: ProjectPaths,
     split: TemporalSplit,
@@ -1913,6 +2269,27 @@ def _ranker_candidate_export_path(
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        content_similarity_source_name=(
+            _effective_content_similarity_source_name(args)
+            if getattr(args, "content_similarity_manifest_path", None) is not None
+            else None
+        ),
+        content_similarity_manifest_path=getattr(args, "content_similarity_manifest_path", None),
+        content_similarity_popularity_prior_weight=(
+            getattr(args, "content_similarity_popularity_prior_weight", 0.0)
+            if getattr(args, "content_similarity_manifest_path", None) is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            getattr(args, "content_similarity_popularity_lookback_days", None)
+            if getattr(args, "content_similarity_manifest_path", None) is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            getattr(args, "content_similarity_candidate_pool_size", None)
+            if getattr(args, "content_similarity_manifest_path", None) is not None
+            else None
         ),
         max_target_customers=getattr(args, "max_target_customers", None),
     )
@@ -1962,6 +2339,31 @@ def _write_cached_ranker_candidate_export(
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        content_similarity_manifest_path=_resolve_optional_path_under_root(
+            paths, getattr(args, "content_similarity_manifest_path", None)
+        ),
+        content_similarity_source_name=_effective_content_similarity_source_name(args),
+        content_similarity_max_history_items=getattr(
+            args,
+            "content_similarity_max_history_items",
+            DEFAULT_MAX_HISTORY_ITEMS,
+        ),
+        content_similarity_exclude_history=not getattr(args, "include_content_history", False),
+        content_similarity_popularity_prior_weight=getattr(
+            args,
+            "content_similarity_popularity_prior_weight",
+            0.0,
+        ),
+        content_similarity_popularity_lookback_days=getattr(
+            args,
+            "content_similarity_popularity_lookback_days",
+            None,
+        ),
+        content_similarity_candidate_pool_size=getattr(
+            args,
+            "content_similarity_candidate_pool_size",
+            None,
+        ),
         max_target_customers=getattr(args, "max_target_customers", None),
     )
     written_report_path = write_candidate_export_summary(summary, candidate_report_path)
@@ -2032,6 +2434,26 @@ def _validation_labels_for_split(
         customer_id: validation_data.validation_labels[customer_id]
         for customer_id in target_customer_ids
     }
+
+
+def _effective_content_similarity_source_name(args: argparse.Namespace) -> str:
+    """Return the source name implied by content-similarity CLI config."""
+
+    source_name = getattr(args, "content_similarity_source_name", MULTIMODAL_SIMILARITY_SOURCE)
+    prior_weight = getattr(args, "content_similarity_popularity_prior_weight", 0.0)
+    if prior_weight > 0.0 and source_name == MULTIMODAL_SIMILARITY_SOURCE:
+        return MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE
+    return source_name
+
+
+def _effective_diagnostics_content_similarity_source_name(args: argparse.Namespace) -> str:
+    """Return the source name implied by content diagnostics CLI config."""
+
+    source_name = getattr(args, "source_name", MULTIMODAL_SIMILARITY_SOURCE)
+    prior_weight = getattr(args, "popularity_prior_weight", 0.0)
+    if prior_weight > 0.0 and source_name == MULTIMODAL_SIMILARITY_SOURCE:
+        return MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE
+    return source_name
 
 
 def _learned_ranker_config_slug(args: argparse.Namespace) -> str:
