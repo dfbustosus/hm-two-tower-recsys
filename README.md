@@ -38,6 +38,9 @@ pixels so image/text retrieval sources can be added with measured coverage.
 The multi-stage architecture plan is documented in [`docs/architecture.md`](docs/architecture.md).
 The image-aware/two-tower challenger design is documented in
 [`docs/multimodal-two-tower-architecture.md`](docs/multimodal-two-tower-architecture.md).
+The mathematical methodology for temporal validation, MAP@12, retrieval,
+ranking, multimodal embeddings, and two-tower challengers is documented in
+[`docs/methodology.md`](docs/methodology.md).
 
 ## Local data and artifact policy
 
@@ -152,6 +155,23 @@ Generated records and reports are local-only under:
 artifacts/multimodal/article-content/
 ```
 
+For bounded embedding experiments, prefer a leakage-safe transaction-prioritized
+content subset instead of the first rows from `articles.csv`. For example, this
+exports the 5,000 articles with strongest pre-cutoff popularity in the 30 days
+before the validation cutoff:
+
+```bash
+make article-content-export \
+  ARTICLE_CONTENT_PRIORITY_CUTOFF=2020-09-16 \
+  ARTICLE_CONTENT_PRIORITY_LOOKBACK_DAYS=30 \
+  ARTICLE_CONTENT_MAX_ARTICLES=5000
+```
+
+When the content cache will be used to train a learned ranker on a previous
+label window, build the bounded cache with a priority cutoff no later than the
+ranker training cutoff, or use a full article cache. A partial cache selected
+using future transactions can leak through candidate availability.
+
 The package also includes lightweight contracts for loading versioned cached
 article embeddings and exact cosine retrieval. Provider jobs should write
 embeddings under ignored `models/embeddings/articles/` with manifests that record
@@ -165,6 +185,17 @@ CLIP-style provider, defaulting to FashionCLIP:
 ```bash
 python -m pip install torch transformers pillow
 make article-embeddings ARTICLE_EMBEDDING_MAX_ARTICLES=100
+```
+
+To embed a prioritized subset, point the embedding job at the exported content
+CSV. The default cache directory includes the content-subset stem and optional
+article cap to avoid overwriting unrelated caches:
+
+```bash
+make article-embeddings \
+  ARTICLE_EMBEDDING_ARTICLE_CONTENT_PATH=artifacts/multimodal/article-content/article_content_priority_cutoff_2020-09-16_lookback_30_first_5000_articles.csv \
+  ARTICLE_EMBEDDING_MAX_ARTICLES=1000 \
+  ARTICLE_EMBEDDING_BATCH_SIZE=64
 ```
 
 Set `ARTICLE_EMBEDDING_KIND=image`, `text`, or `multimodal`; override
@@ -191,6 +222,24 @@ vectors and writes ignored diagnostics under:
 ```text
 artifacts/multimodal/content-similarity/
 ```
+
+Raw content similarity can be too semantic and not purchase-calibrated. To test
+a leakage-safe popularity-calibrated content source, rerank an oversampled
+content-neighbor pool with a pre-cutoff recent-popularity prior:
+
+```bash
+make content-similarity-diagnostics \
+  CUTOFF=2020-09-16 \
+  CONTENT_SIMILARITY_MANIFEST=models/embeddings/articles/hf-clip_patrickjohncyh_fashion-clip_main_article_content_priority_cutoff_2020-09-09_lookback_30_first_5000_articles/multimodal_manifest.json \
+  CONTENT_SIMILARITY_POPULARITY_PRIOR_WEIGHT=0.3 \
+  CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS=7 \
+  CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE=200
+```
+
+When enabled, the default source name becomes
+`multimodal_similarity_popularity_prior` unless explicitly overridden. Treat this
+as a candidate-recall experiment until a same-split ranker validation improves
+MAP@12.
 
 Summarize a leakage-safe last-week validation split:
 
