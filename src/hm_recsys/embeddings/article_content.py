@@ -35,11 +35,14 @@ DEFAULT_ARTICLE_TEXT_FIELD_NAMES = (
     "garment_group_name",
     "detail_desc",
 )
-ARTICLE_CONTENT_EXPORT_HEADER = (
+ARTICLE_CONTENT_FIXED_COLUMNS = (
     "article_id",
     "combined_text",
     "image_relative_path",
     "image_exists",
+)
+ARTICLE_CONTENT_EXPORT_HEADER = (
+    *ARTICLE_CONTENT_FIXED_COLUMNS,
     *DEFAULT_ARTICLE_TEXT_FIELD_NAMES,
 )
 
@@ -284,6 +287,54 @@ def write_article_content_export_report(
     return summary_with_report
 
 
+def iter_article_content_records_from_csv(
+    content_path: Path | str,
+) -> Iterable[ArticleContentRecord]:
+    """Yield article content records from an exported article-content CSV.
+
+    Args:
+        content_path: CSV path written by ``write_article_content_export``.
+
+    Yields:
+        Article content records preserving the CSV row order.
+
+    Raises:
+        ValueError: If the header, IDs, booleans, or image-path consistency are
+            invalid.
+    """
+
+    resolved_path = Path(content_path).expanduser().resolve()
+    with resolved_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        header = tuple(reader.fieldnames or ())
+        if len(header) < len(ARTICLE_CONTENT_FIXED_COLUMNS):
+            raise ValueError(f"{resolved_path} is missing article-content columns")
+        fixed_header = header[: len(ARTICLE_CONTENT_FIXED_COLUMNS)]
+        if fixed_header != ARTICLE_CONTENT_FIXED_COLUMNS:
+            raise ValueError(
+                f"{resolved_path} fixed columns must be {ARTICLE_CONTENT_FIXED_COLUMNS}, "
+                f"got {fixed_header}"
+            )
+        text_field_names = header[len(ARTICLE_CONTENT_FIXED_COLUMNS) :]
+        _validate_text_field_names(text_field_names)
+        for line_number, row in enumerate(reader, start=2):
+            article_id = row["article_id"]
+            if not is_article_id(article_id):
+                raise ValueError(f"line {line_number}: invalid article_id {article_id!r}")
+            image_exists = _parse_bool(row["image_exists"], line_number=line_number)
+            text_fields = {
+                field_name: _normalize_text_value(row[field_name])
+                for field_name in text_field_names
+            }
+            yield ArticleContentRecord(
+                article_id=article_id,
+                text_fields=text_fields,
+                combined_text=_normalize_text_value(row["combined_text"]),
+                image_relative_path=row["image_relative_path"],
+                image_exists=image_exists,
+            )
+
+
 def _validate_text_field_names(text_field_names: Sequence[str]) -> tuple[str, ...]:
     """Validate and normalize requested article text field names."""
 
@@ -301,3 +352,13 @@ def _normalize_text_value(value: str) -> str:
     """Collapse whitespace and strip CSV text values for stable encoder inputs."""
 
     return " ".join(value.split())
+
+
+def _parse_bool(value: str, *, line_number: int) -> bool:
+    """Parse lowercase CSV boolean values."""
+
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError(f"line {line_number}: image_exists must be 'true' or 'false'")
