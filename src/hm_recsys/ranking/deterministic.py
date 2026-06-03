@@ -18,14 +18,28 @@ from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER, Candid
 from hm_recsys.retrieval.source_names import (
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    IMAGE_SIMILARITY_SOURCE,
+    MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+    MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    TEXT_SIMILARITY_SOURCE,
+    TWO_TOWER_MULTIMODAL_SOURCE,
 )
 
 BASELINE_SOURCE_ORDER = (
     REPEAT_SOURCE,
     RECENT_POPULARITY_SOURCE,
     ALL_TIME_POPULARITY_SOURCE,
+)
+CONTENT_SIMILARITY_SOURCES = frozenset(
+    {
+        IMAGE_SIMILARITY_SOURCE,
+        TEXT_SIMILARITY_SOURCE,
+        MULTIMODAL_SIMILARITY_SOURCE,
+        MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+        TWO_TOWER_MULTIMODAL_SOURCE,
+    }
 )
 
 
@@ -42,6 +56,8 @@ class DeterministicRankerWeights:
         all_time_popularity_score_weight: Weight for all-time popularity reciprocal rank.
         co_visitation_presence_weight: Additive weight for co-visitation candidates.
         co_visitation_score_weight: Weight for ``log1p(co_visitation_score)``.
+        content_similarity_presence_weight: Additive weight for content candidates.
+        content_similarity_score_weight: Weight for content cosine/source score.
         source_count_weight: Weight for the number of sources emitting the pair.
         best_rank_score_weight: Weight for reciprocal best source rank.
     """
@@ -54,6 +70,8 @@ class DeterministicRankerWeights:
     all_time_popularity_score_weight: float = 0.15
     co_visitation_presence_weight: float = 0.35
     co_visitation_score_weight: float = 0.10
+    content_similarity_presence_weight: float = 0.10
+    content_similarity_score_weight: float = 0.05
     source_count_weight: float = 0.05
     best_rank_score_weight: float = 0.05
 
@@ -77,6 +95,8 @@ class CandidateFeatures:
         all_time_popularity_score: Source score from all-time popularity.
         co_visitation_rank: Optional source rank from co-visitation.
         co_visitation_score: Source score from co-visitation.
+        content_similarity_rank: Optional source rank from cached content similarity.
+        content_similarity_score: Source score from cached content similarity.
         source_count: Number of candidate sources emitting this pair.
         best_rank: Best one-based source rank across sources.
         max_source_score: Maximum raw source score across sources.
@@ -93,6 +113,8 @@ class CandidateFeatures:
     all_time_popularity_score: float = 0.0
     co_visitation_rank: int | None = None
     co_visitation_score: float = 0.0
+    content_similarity_rank: int | None = None
+    content_similarity_score: float = 0.0
     source_count: int = 0
     best_rank: int | None = None
     max_source_score: float = 0.0
@@ -131,6 +153,11 @@ class CandidateFeatures:
                 self.co_visitation_rank, record.source_rank
             )
             self.co_visitation_score = max(self.co_visitation_score, record.source_score)
+        elif record.source in CONTENT_SIMILARITY_SOURCES:
+            self.content_similarity_rank = _min_optional_rank(
+                self.content_similarity_rank, record.source_rank
+            )
+            self.content_similarity_score = max(self.content_similarity_score, record.source_score)
 
     @property
     def has_repeat(self) -> bool:
@@ -155,6 +182,12 @@ class CandidateFeatures:
         """Return whether co-visitation emitted this pair."""
 
         return self.co_visitation_rank is not None
+
+    @property
+    def has_content_similarity(self) -> bool:
+        """Return whether a content-similarity source emitted this pair."""
+
+        return self.content_similarity_rank is not None
 
 
 @dataclass(frozen=True)
@@ -299,6 +332,9 @@ def score_candidate(
     if features.has_co_visitation:
         score += weights.co_visitation_presence_weight
         score += weights.co_visitation_score_weight * log1p(features.co_visitation_score)
+    if features.has_content_similarity:
+        score += weights.content_similarity_presence_weight
+        score += weights.content_similarity_score_weight * features.content_similarity_score
     return score
 
 
