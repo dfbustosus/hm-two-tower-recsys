@@ -1,10 +1,13 @@
 import csv
+import json
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
 import pytest
 
 from hm_recsys.data.io import TransactionEvent
+from hm_recsys.embeddings.cache_manifest import ArticleEmbeddingCacheManifest
 from hm_recsys.evaluation.temporal import TemporalSplit
 from hm_recsys.retrieval.candidate_export import (
     CANDIDATE_EXPORT_HEADER,
@@ -16,6 +19,7 @@ from hm_recsys.retrieval.candidate_export import (
 from hm_recsys.retrieval.source_names import (
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
 )
@@ -26,6 +30,7 @@ THIRD_CUSTOMER_ID = "c" * 64
 ARTICLE_1 = "0000000001"
 ARTICLE_2 = "0000000002"
 VALIDATION_ONLY_ARTICLE = "0000000003"
+CONTENT_SIMILAR_ARTICLE = "0000000004"
 
 
 def test_candidate_record_to_row_uses_schema_and_stable_score_format() -> None:
@@ -82,6 +87,44 @@ def test_validation_candidate_export_is_leakage_safe_and_ranker_ready(tmp_path: 
         "source_rank": "1",
         "source_score": "1",
     }
+
+
+def test_validation_candidate_export_can_include_cached_content_similarity(
+    tmp_path: Path,
+) -> None:
+    split = TemporalSplit.from_isoformat("2020-01-08")
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 8), CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
+    ]
+    manifest_path = write_test_embedding_cache(tmp_path)
+    output_path = tmp_path / "content_candidates.csv"
+
+    summary = write_validation_candidate_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=split,
+        submission_customer_ids=(CUSTOMER_ID,),
+        output_path=output_path,
+        k=1,
+        include_co_visitation=False,
+        content_similarity_manifest_path=manifest_path,
+        content_similarity_source_name=MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+        content_similarity_popularity_prior_weight=0.3,
+        content_similarity_popularity_lookback_days=7,
+        content_similarity_candidate_pool_size=2,
+    )
+
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8", newline="")))
+    assert summary.source_row_counts[MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE] == 1
+    assert summary.content_similarity_manifest_path == str(manifest_path.resolve())
+    assert summary.content_similarity_popularity_prior_weight == 0.3
+    assert summary.content_similarity_popularity_lookback_days == 7
+    assert summary.content_similarity_candidate_pool_size == 2
+    assert {
+        row["article_id"]
+        for row in rows
+        if row["source"] == MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE
+    } == {CONTENT_SIMILAR_ARTICLE}
 
 
 def test_candidate_export_supports_deterministic_smoke_cap(tmp_path: Path) -> None:
@@ -144,3 +187,43 @@ def test_write_candidate_export_summary(tmp_path: Path) -> None:
 
     assert report_path.exists()
     assert '"rows_written"' in report_path.read_text(encoding="utf-8")
+
+
+def write_test_embedding_cache(tmp_path: Path) -> Path:
+    embeddings_path = tmp_path / "embeddings.jsonl"
+    mapping_path = tmp_path / "mapping.csv"
+    manifest_path = tmp_path / "manifest.json"
+    embeddings_path.write_text(
+        f'{{"article_id":"{ARTICLE_1}","vector":[1.0,0.0]}}\n'
+        f'{{"article_id":"{CONTENT_SIMILAR_ARTICLE}","vector":[0.99,0.01]}}\n',
+        encoding="utf-8",
+    )
+    with mapping_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("embedding_index", "article_id"))
+        writer.writerow(("0", ARTICLE_1))
+        writer.writerow(("1", CONTENT_SIMILAR_ARTICLE))
+    manifest = ArticleEmbeddingCacheManifest(
+        generated_at_utc="2026-06-03T00:00:00+00:00",
+        provider_name="test-provider",
+        provider_model_id="test/model",
+        provider_model_revision="test",
+        embedding_kind="multimodal",
+        dimension=2,
+        distance_metric="cosine",
+        normalized=True,
+        vector_format="jsonl",
+        dtype="float32",
+        article_count=2,
+        embedding_count=2,
+        missing_embedding_count=0,
+        source_article_content_path=str(tmp_path / "article_content.csv"),
+        source_image_inventory_path=None,
+        embeddings_path=str(embeddings_path),
+        article_mapping_path=str(mapping_path),
+        preprocessing="test",
+        license="test",
+        manifest_path=str(manifest_path),
+    )
+    manifest_path.write_text(json.dumps(asdict(manifest)), encoding="utf-8")
+    return manifest_path
