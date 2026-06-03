@@ -203,6 +203,8 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Expose local article-image inventory through `make image-inventory`; write coverage reports and article-to-image manifests under ignored `artifacts/multimodal/image-inventory/` without loading image pixels.
 - Expose encoder-ready article content export through `make article-content-export`; write normalized text fields and local image-path availability under ignored `artifacts/multimodal/article-content/` without adding heavyweight ML dependencies.
 - Cache future FashionCLIP/OpenCLIP/SigLIP article embeddings under ignored `models/embeddings/articles/` with provider/model/revision/dimension/preprocessing manifests.
+- Expose bounded optional open-source CLIP-style article embedding generation through `make article-embeddings ARTICLE_EMBEDDING_MAX_ARTICLES=100`; keep `torch`, `transformers`, and `pillow` optional rather than base dependencies.
+- Evaluate cached article embeddings through exact content-similarity retrieval first via `make content-similarity-diagnostics CUTOFF=YYYY-MM-DD`; emit source rows such as `image_similarity`, `text_similarity`, or `multimodal_similarity` only after manifest, vector shape, article-ID mapping, and candidate recall checks pass.
 - Compare two-tower candidates against popularity, repeat, segment, and co-visitation candidates on recall and downstream MAP@12.
 - Add multimodal, graph, sequential, or neural reranking only when they have a narrow hypothesis and measurable acceptance criteria.
 
