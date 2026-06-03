@@ -97,6 +97,12 @@ Embedding contracts
 .. automodule:: hm_recsys.embeddings.contracts
    :members:
 
+Article image inventory
+-----------------------
+
+.. automodule:: hm_recsys.embeddings.image_inventory
+   :members:
+
 Indexing contracts
 ------------------
 
@@ -107,6 +113,12 @@ Training contracts
 ------------------
 
 .. automodule:: hm_recsys.training.two_tower
+   :members:
+
+Two-tower example export
+------------------------
+
+.. automodule:: hm_recsys.training.two_tower_export
    :members:
 
 Infrastructure paths
