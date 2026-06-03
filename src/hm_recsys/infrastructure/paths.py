@@ -537,6 +537,59 @@ class ProjectPaths:
         cache_dir = self.article_embedding_cache_dir(provider_slug)
         return cache_dir / f"{_safe_name(embedding_kind)}_manifest.json"
 
+    def article_embedding_cache_embeddings_path(
+        self,
+        provider_slug: str,
+        embedding_kind: str,
+        vector_format: str = "jsonl",
+    ) -> Path:
+        """Return the default article embedding vector-cache path.
+
+        Args:
+            provider_slug: Filesystem-safe provider/model descriptor.
+            embedding_kind: Embedding family such as ``image`` or ``text``.
+            vector_format: File extension/format such as ``jsonl`` or ``npy``.
+
+        Returns:
+            Embedding cache path under ``models/embeddings/articles/``.
+        """
+
+        if not embedding_kind:
+            raise ValueError("embedding_kind must not be empty")
+        if not vector_format:
+            raise ValueError("vector_format must not be empty")
+        cache_dir = self.article_embedding_cache_dir(provider_slug)
+        return cache_dir / f"{_safe_name(embedding_kind)}_embeddings.{_safe_name(vector_format)}"
+
+    def article_embedding_cache_mapping_path(
+        self,
+        provider_slug: str,
+        embedding_kind: str,
+    ) -> Path:
+        """Return the default article embedding row-mapping path."""
+
+        if not embedding_kind:
+            raise ValueError("embedding_kind must not be empty")
+        cache_dir = self.article_embedding_cache_dir(provider_slug)
+        return cache_dir / f"{_safe_name(embedding_kind)}_article_mapping.csv"
+
+    def content_similarity_diagnostics_report_path(
+        self,
+        cutoff: str,
+        source_name: str,
+        max_target_customers: int | None = None,
+    ) -> Path:
+        """Return the default cached content-similarity diagnostics report path."""
+
+        if not cutoff:
+            raise ValueError("cutoff must not be empty")
+        if not source_name:
+            raise ValueError("source_name must not be empty")
+        name = f"content_similarity_{_safe_name(source_name)}_cutoff_{_safe_name(cutoff)}"
+        if max_target_customers is not None:
+            name = f"{name}_first_{max_target_customers}_customers"
+        return self.artifacts_dir / "multimodal" / "content-similarity" / f"{name}.json"
+
 
 def _safe_name(value: str) -> str:
     """Return a filesystem-safe name derived from an arbitrary string."""
