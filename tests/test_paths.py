@@ -57,3 +57,37 @@ def test_project_paths_include_learned_ranker_submission_locations(tmp_path: Pat
     assert paths.learned_ranker_submission_report_path(submission_path) == (
         tmp_path / "artifacts" / "ranker-submissions" / f"{submission_path.stem}.json"
     )
+
+
+def test_project_paths_include_two_tower_export_locations(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
+    paths = ProjectPaths.from_root(tmp_path)
+
+    examples_path = paths.two_tower_examples_path(
+        cutoff="2020-09-16",
+        negatives_per_positive=2,
+        seed=42,
+        max_positive_examples=1000,
+    )
+
+    assert examples_path.parent == tmp_path / "artifacts" / "two-tower"
+    assert examples_path.name == (
+        "two_tower_examples_cutoff_2020-09-16_neg2_seed42_first_1000_positives.csv"
+    )
+    assert paths.two_tower_customer_mapping_path(examples_path).name.endswith("_customers.csv")
+    assert paths.two_tower_article_mapping_path(examples_path).name.endswith("_articles.csv")
+    assert paths.two_tower_example_export_report_path(examples_path) == (
+        tmp_path / "artifacts" / "two-tower" / f"{examples_path.stem}.json"
+    )
+
+
+def test_project_paths_include_article_image_inventory_locations(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
+    paths = ProjectPaths.from_root(tmp_path)
+
+    assert paths.article_image_inventory_manifest_path == (
+        tmp_path / "artifacts" / "multimodal" / "image-inventory" / "article_image_inventory.csv"
+    )
+    assert paths.article_image_inventory_report_path == (
+        tmp_path / "artifacts" / "multimodal" / "image-inventory" / "article_image_inventory.json"
+    )
