@@ -23,6 +23,9 @@ hm-recsys = "hm_recsys.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+hm_recsys = ["py.typed"]
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]
