@@ -33,3 +33,7 @@ autodoc_typehints = "description"
 napoleon_google_docstring = True
 napoleon_numpy_docstring = False
 myst_heading_anchors = 3
+myst_enable_extensions = [
+    "amsmath",
+    "dollarmath",
+]
