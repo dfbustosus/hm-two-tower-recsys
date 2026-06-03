@@ -37,3 +37,23 @@ def test_project_paths_accept_relative_raw_data_override(tmp_path: Path) -> None
     paths = ProjectPaths.from_root(tmp_path, raw_data_dir="input/hm")
 
     assert paths.raw_data_dir == tmp_path / "input" / "hm"
+
+
+def test_project_paths_include_learned_ranker_submission_locations(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
+    paths = ProjectPaths.from_root(tmp_path)
+
+    submission_path = paths.learned_ranker_submission_path(
+        k=12,
+        candidate_k=12,
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        config_slug="e3_lr0p01",
+    )
+
+    assert submission_path.parent == tmp_path / "submissions"
+    assert submission_path.name.startswith("learned_linear_ranker_lookback_7")
+    assert paths.learned_ranker_submission_report_path(submission_path) == (
+        tmp_path / "artifacts" / "ranker-submissions" / f"{submission_path.stem}.json"
+    )
