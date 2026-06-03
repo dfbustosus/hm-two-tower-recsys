@@ -42,6 +42,9 @@ def test_evaluate_cached_content_similarity_reports_recall_and_coverage(tmp_path
         submission_customer_ids=(CUSTOMER_ID, OTHER_CUSTOMER_ID),
         manifest_path=manifest_path,
         evaluation_ks=(1, 2),
+        popularity_prior_weight=0.25,
+        popularity_lookback_days=30,
+        candidate_pool_size=3,
     )
 
     assert report.target_customers == 2
@@ -54,6 +57,9 @@ def test_evaluate_cached_content_similarity_reports_recall_and_coverage(tmp_path
     assert report.recall_at_k["2"] == 1.0
     assert report.map_at_12 == 1.0
     assert report.candidate_count_distribution.minimum == 2
+    assert report.popularity_prior_weight == 0.25
+    assert report.popularity_lookback_days == 30
+    assert report.candidate_pool_size == 3
 
 
 def test_content_similarity_diagnostics_supports_target_cap_and_report_write(
