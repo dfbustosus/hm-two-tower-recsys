@@ -14,6 +14,7 @@ from hm_recsys.data.io import (
     load_submission_customer_ids,
     load_submission_customer_ids_in_order,
 )
+from hm_recsys.embeddings.image_inventory import write_article_image_inventory
 from hm_recsys.evaluation.submission import (
     validate_submission_file,
     write_submission_file,
@@ -66,6 +67,11 @@ from hm_recsys.retrieval.candidate_export import (
 from hm_recsys.retrieval.co_visitation import (
     DEFAULT_MAX_HISTORY_ITEMS,
     DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+)
+from hm_recsys.training.two_tower_export import (
+    TwoTowerExampleExportConfig,
+    write_two_tower_example_export,
+    write_two_tower_example_export_summary,
 )
 
 
@@ -456,6 +462,54 @@ def build_parser() -> argparse.ArgumentParser:
     learned_submission_parser.add_argument("--validation-report-path", type=Path, default=None)
     learned_submission_parser.add_argument("--report-path", type=Path, default=None)
     learned_submission_parser.set_defaults(handler=_handle_generate_learned_ranker_submission)
+
+    two_tower_export_parser = subparsers.add_parser(
+        "export-two-tower-examples",
+        help="Export cutoff-safe two-tower positives, random negatives, and ID mappings.",
+    )
+    two_tower_export_parser.add_argument(
+        "--cutoff",
+        required=True,
+        help="Exclusive training cutoff date, YYYY-MM-DD.",
+    )
+    two_tower_export_parser.add_argument("--horizon-days", type=int, default=7)
+    two_tower_export_parser.add_argument("--negatives-per-positive", type=int, default=1)
+    two_tower_export_parser.add_argument("--seed", type=int, default=42)
+    two_tower_export_parser.add_argument(
+        "--max-positive-examples",
+        type=int,
+        default=None,
+        help="Optional deterministic cap for smoke exports.",
+    )
+    two_tower_export_parser.add_argument(
+        "--negative-sampling",
+        default="random",
+        choices=("random",),
+        help="Negative sampling strategy. Currently only random is implemented.",
+    )
+    two_tower_export_parser.add_argument("--project-root", type=Path, default=None)
+    two_tower_export_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    two_tower_export_parser.add_argument("--examples-path", type=Path, default=None)
+    two_tower_export_parser.add_argument("--customer-mapping-path", type=Path, default=None)
+    two_tower_export_parser.add_argument("--article-mapping-path", type=Path, default=None)
+    two_tower_export_parser.add_argument("--report-path", type=Path, default=None)
+    two_tower_export_parser.set_defaults(handler=_handle_export_two_tower_examples)
+
+    image_inventory_parser = subparsers.add_parser(
+        "inventory-article-images",
+        help="Map articles.csv IDs to local H&M image paths and report missing/malformed images.",
+    )
+    image_inventory_parser.add_argument("--project-root", type=Path, default=None)
+    image_inventory_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    image_inventory_parser.add_argument("--manifest-path", type=Path, default=None)
+    image_inventory_parser.add_argument("--report-path", type=Path, default=None)
+    image_inventory_parser.add_argument(
+        "--max-examples",
+        type=int,
+        default=10,
+        help="Maximum missing/extra/malformed examples retained in the JSON report.",
+    )
+    image_inventory_parser.set_defaults(handler=_handle_inventory_article_images)
     return parser
 
 
@@ -1401,6 +1455,131 @@ def _handle_generate_learned_ranker_submission(args: argparse.Namespace) -> int:
     for failure in validation_result.failures:
         print(f"- {failure}")
     return 0 if validation_result.valid else 1
+
+
+def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
+    """Handle the ``export-two-tower-examples`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` after writing examples, mappings, and summary metadata.
+    """
+
+    if args.negative_sampling != "random":
+        raise ValueError(f"unsupported negative_sampling: {args.negative_sampling!r}")
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    config = TwoTowerExampleExportConfig(
+        negatives_per_positive=args.negatives_per_positive,
+        seed=args.seed,
+        negative_sampling="random",
+        max_positive_examples=args.max_positive_examples,
+    )
+    examples_path = args.examples_path or paths.two_tower_examples_path(
+        cutoff=args.cutoff,
+        negatives_per_positive=args.negatives_per_positive,
+        seed=args.seed,
+        max_positive_examples=args.max_positive_examples,
+    )
+    examples_path = _resolve_path_under_root(paths, examples_path)
+    customer_mapping_path = args.customer_mapping_path or paths.two_tower_customer_mapping_path(
+        examples_path
+    )
+    customer_mapping_path = _resolve_path_under_root(paths, customer_mapping_path)
+    article_mapping_path = args.article_mapping_path or paths.two_tower_article_mapping_path(
+        examples_path
+    )
+    article_mapping_path = _resolve_path_under_root(paths, article_mapping_path)
+    report_path = args.report_path or paths.two_tower_example_export_report_path(examples_path)
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    print(
+        "Exporting two-tower examples: "
+        f"cutoff={split.cutoff.isoformat()}, "
+        f"negatives_per_positive={config.negatives_per_positive}, "
+        f"seed={config.seed}, "
+        f"max_positive_examples={config.max_positive_examples}",
+        flush=True,
+    )
+    summary = write_two_tower_example_export(
+        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        split=split,
+        examples_path=examples_path,
+        customer_mapping_path=customer_mapping_path,
+        article_mapping_path=article_mapping_path,
+        config=config,
+        progress_interval=5_000_000,
+        progress_callback=lambda phase, rows: print(
+            f"{phase} progress: {rows} transaction rows",
+            flush=True,
+        ),
+    )
+    written_report_path = write_two_tower_example_export_summary(summary, report_path)
+
+    print(f"Cutoff: {summary.cutoff}")
+    print(f"Validation end exclusive: {summary.validation_end_exclusive}")
+    print(f"Train rows seen: {summary.train_rows_seen}")
+    print(f"Positive examples: {summary.positive_examples_written}")
+    print(f"Negative examples: {summary.negative_examples_written}")
+    print(f"Rows written: {summary.rows_written}")
+    print(f"Mapped customers: {summary.unique_customers}")
+    print(f"Mapped articles: {summary.unique_articles}")
+    print(f"Skipped negative examples: {summary.skipped_negative_examples}")
+    print(f"Examples CSV written to: {summary.examples_path}")
+    print(f"Customer mapping written to: {summary.customer_mapping_path}")
+    print(f"Article mapping written to: {summary.article_mapping_path}")
+    print(f"Summary report written to: {written_report_path}")
+    return 0
+
+
+def _handle_inventory_article_images(args: argparse.Namespace) -> int:
+    """Handle the ``inventory-article-images`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        Zero when the image path is usable; non-zero when a blocking inventory
+        failure is detected.
+    """
+
+    paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
+    manifest_path = args.manifest_path or paths.article_image_inventory_manifest_path
+    manifest_path = _resolve_path_under_root(paths, manifest_path)
+    report_path = args.report_path or paths.article_image_inventory_report_path
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    print(
+        "Inventorying article images: "
+        f"raw_data_dir={paths.raw_data_dir}, max_examples={args.max_examples}",
+        flush=True,
+    )
+    summary = write_article_image_inventory(
+        raw_data_dir=paths.raw_data_dir,
+        manifest_path=manifest_path,
+        report_path=report_path,
+        max_examples=args.max_examples,
+    )
+
+    print(f"Image inventory valid: {summary.valid}")
+    print(f"Articles: {summary.article_count}")
+    print(f"Scanned image files: {summary.scanned_image_file_count}")
+    print(f"Canonical image files: {summary.canonical_image_file_count}")
+    print(f"Matched articles: {summary.matched_article_count}")
+    print(f"Missing article images: {summary.missing_article_count}")
+    print(f"Extra canonical images: {summary.extra_canonical_image_count}")
+    print(f"Malformed image files: {summary.malformed_image_file_count}")
+    print(f"Image coverage: {summary.image_coverage:.6f}")
+    if summary.failures:
+        print("Failures:")
+        for failure in summary.failures:
+            print(f"- {failure}")
+    print(f"Manifest CSV written to: {summary.manifest_path}")
+    print(f"Summary report written to: {summary.report_path}")
+    return 0 if summary.valid else 1
 
 
 def _resolve_report_path(paths: ProjectPaths, report_path: Path | None) -> Path:
