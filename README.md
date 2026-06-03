@@ -152,6 +152,46 @@ Generated records and reports are local-only under:
 artifacts/multimodal/article-content/
 ```
 
+The package also includes lightweight contracts for loading versioned cached
+article embeddings and exact cosine retrieval. Provider jobs should write
+embeddings under ignored `models/embeddings/articles/` with manifests that record
+provider name, model ID, revision, dimension, preprocessing, license notes, and
+the exact article-ID mapping. Cached embedding retrieval must be evaluated as a
+candidate source before it is blended into ranker submissions.
+
+Generate a bounded smoke cache with an optional open-source HuggingFace
+CLIP-style provider, defaulting to FashionCLIP:
+
+```bash
+python -m pip install torch transformers pillow
+make article-embeddings ARTICLE_EMBEDDING_MAX_ARTICLES=100
+```
+
+Set `ARTICLE_EMBEDDING_KIND=image`, `text`, or `multimodal`; override
+`ARTICLE_EMBEDDING_MODEL_ID` for OpenCLIP/SigLIP-style HuggingFace checkpoints
+that expose `get_image_features` and/or `get_text_features`. Full caches belong
+under ignored local storage:
+
+```text
+models/embeddings/articles/
+```
+
+Evaluate a cached embedding source as leakage-safe content-similarity retrieval
+before blending it into ranker candidates:
+
+```bash
+make content-similarity-diagnostics \
+  CUTOFF=2020-09-16 \
+  CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS=1000
+```
+
+This computes MAP@12 and Recall@12/50/100 from pre-cutoff customer history
+vectors and writes ignored diagnostics under:
+
+```text
+artifacts/multimodal/content-similarity/
+```
+
 Summarize a leakage-safe last-week validation split:
 
 ```bash
