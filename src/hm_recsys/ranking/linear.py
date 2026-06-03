@@ -36,6 +36,9 @@ LINEAR_FEATURE_NAMES = (
     "has_co_visitation",
     "co_visitation_log_score",
     "co_visitation_rank_reciprocal",
+    "has_content_similarity",
+    "content_similarity_score",
+    "content_similarity_rank_reciprocal",
     "source_count_scaled",
     "best_rank_reciprocal",
 )
@@ -245,7 +248,10 @@ def feature_vector(features: CandidateFeatures) -> tuple[float, ...]:
         float(features.has_co_visitation),
         log1p(features.co_visitation_score),
         _rank_reciprocal(features.co_visitation_rank),
-        features.source_count / 4.0,
+        float(features.has_content_similarity),
+        features.content_similarity_score,
+        _rank_reciprocal(features.content_similarity_rank),
+        features.source_count / 5.0,
         _rank_reciprocal(features.best_rank),
     )
 
