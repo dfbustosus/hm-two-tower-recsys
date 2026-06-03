@@ -116,7 +116,42 @@ def test_project_paths_include_article_content_and_embedding_cache_locations(
     assert paths.article_embedding_cache_manifest_path("FashionCLIP/v1", "image") == (
         tmp_path / "models" / "embeddings" / "articles" / "FashionCLIP_v1" / "image_manifest.json"
     )
+    assert paths.article_embedding_cache_embeddings_path("FashionCLIP/v1", "image") == (
+        tmp_path
+        / "models"
+        / "embeddings"
+        / "articles"
+        / "FashionCLIP_v1"
+        / "image_embeddings.jsonl"
+    )
+    assert paths.article_embedding_cache_mapping_path("FashionCLIP/v1", "image") == (
+        tmp_path
+        / "models"
+        / "embeddings"
+        / "articles"
+        / "FashionCLIP_v1"
+        / "image_article_mapping.csv"
+    )
+    assert paths.content_similarity_diagnostics_report_path(
+        "2020-09-16", "multimodal_similarity", max_target_customers=100
+    ) == (
+        tmp_path
+        / "artifacts"
+        / "multimodal"
+        / "content-similarity"
+        / "content_similarity_multimodal_similarity_cutoff_2020-09-16_first_100_customers.json"
+    )
     with pytest.raises(ValueError, match="provider_slug"):
         paths.article_embedding_cache_dir("")
     with pytest.raises(ValueError, match="embedding_kind"):
         paths.article_embedding_cache_manifest_path("provider", "")
+    with pytest.raises(ValueError, match="embedding_kind"):
+        paths.article_embedding_cache_embeddings_path("provider", "")
+    with pytest.raises(ValueError, match="vector_format"):
+        paths.article_embedding_cache_embeddings_path("provider", "image", "")
+    with pytest.raises(ValueError, match="embedding_kind"):
+        paths.article_embedding_cache_mapping_path("provider", "")
+    with pytest.raises(ValueError, match="cutoff"):
+        paths.content_similarity_diagnostics_report_path("", "source")
+    with pytest.raises(ValueError, match="source_name"):
+        paths.content_similarity_diagnostics_report_path("2020-09-16", "")
