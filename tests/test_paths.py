@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import hm_recsys.infrastructure.paths as path_module
 from hm_recsys.infrastructure.paths import RAW_COMPETITION_DIR_NAME, ProjectPaths, find_project_root
 
 
@@ -14,7 +15,11 @@ def test_find_project_root_from_nested_directory(tmp_path: Path) -> None:
     assert find_project_root(nested) == project_root
 
 
-def test_find_project_root_raises_when_no_marker_exists(tmp_path: Path) -> None:
+def test_find_project_root_raises_when_no_marker_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(path_module, "PROJECT_MARKERS", ("definitely-not-a-project-marker",))
+
     with pytest.raises(FileNotFoundError):
         find_project_root(tmp_path)
 
@@ -91,3 +96,27 @@ def test_project_paths_include_article_image_inventory_locations(tmp_path: Path)
     assert paths.article_image_inventory_report_path == (
         tmp_path / "artifacts" / "multimodal" / "image-inventory" / "article_image_inventory.json"
     )
+
+
+def test_project_paths_include_article_content_and_embedding_cache_locations(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'example'\n", encoding="utf-8")
+    paths = ProjectPaths.from_root(tmp_path)
+
+    assert paths.article_content_export_path == (
+        tmp_path / "artifacts" / "multimodal" / "article-content" / "article_content.csv"
+    )
+    assert paths.article_content_export_report_path == (
+        tmp_path / "artifacts" / "multimodal" / "article-content" / "article_content.json"
+    )
+    assert paths.article_embedding_cache_dir("FashionCLIP/v1") == (
+        tmp_path / "models" / "embeddings" / "articles" / "FashionCLIP_v1"
+    )
+    assert paths.article_embedding_cache_manifest_path("FashionCLIP/v1", "image") == (
+        tmp_path / "models" / "embeddings" / "articles" / "FashionCLIP_v1" / "image_manifest.json"
+    )
+    with pytest.raises(ValueError, match="provider_slug"):
+        paths.article_embedding_cache_dir("")
+    with pytest.raises(ValueError, match="embedding_kind"):
+        paths.article_embedding_cache_manifest_path("provider", "")
