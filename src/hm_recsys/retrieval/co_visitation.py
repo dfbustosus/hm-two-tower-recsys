@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 from hm_recsys.data.io import TransactionEvent
@@ -67,6 +67,9 @@ def build_co_visitation_index(
     target_customer_ids: Iterable[str],
     max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    progress_interval: int | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
 ) -> CoVisitationIndex:
     """Build a co-visitation index from pre-cutoff customer histories.
 
@@ -79,6 +82,9 @@ def build_co_visitation_index(
         target_customer_ids: Customers for whom histories should be retained.
         max_history_items: Maximum recent unique articles kept per customer.
         max_neighbors_per_item: Maximum ranked neighbors kept per source article.
+        progress_interval: Optional transaction-row interval for progress callbacks.
+        progress_callback: Optional callback receiving scanned transaction rows.
+        status_callback: Optional callback receiving post-scan status messages.
 
     Returns:
         Co-visitation index with deterministic ranked neighbors.
@@ -92,24 +98,43 @@ def build_co_visitation_index(
         raise ValueError("max_history_items must be positive")
     if max_neighbors_per_item <= 0:
         raise ValueError("max_neighbors_per_item must be positive")
+    if progress_interval is not None and progress_interval <= 0:
+        raise ValueError("progress_interval must be positive when provided")
 
     target_customer_set = set(target_customer_ids)
     mutable_histories: dict[str, list[str]] = {}
     train_rows_used = 0
+    scanned_rows = 0
 
-    for transaction in transactions:
+    for scanned_rows, transaction in enumerate(transactions, start=1):
         if transaction.t_dat >= split.cutoff:
+            _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
             continue
         train_rows_used += 1
         if transaction.customer_id not in target_customer_set:
+            _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
             continue
         _update_recent_unique_history(
             mutable_histories.setdefault(transaction.customer_id, []),
             transaction.article_id,
             max_history_items=max_history_items,
         )
+        _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
+    if (
+        progress_callback is not None
+        and progress_interval is not None
+        and scanned_rows
+        and scanned_rows % progress_interval != 0
+    ):
+        progress_callback(scanned_rows)
 
+    if status_callback is not None:
+        status_callback(
+            f"building pair counts from {len(mutable_histories)} retained customer histories"
+        )
     pair_counts = _build_pair_counts(mutable_histories.values())
+    if status_callback is not None:
+        status_callback(f"ranking co-visitation neighbors for {len(pair_counts)} source articles")
     neighbors_by_article = _rank_pair_counts(
         pair_counts,
         max_neighbors_per_item=max_neighbors_per_item,
@@ -268,6 +293,21 @@ def _update_recent_unique_history(
     history.append(article_id)
     if len(history) > max_history_items:
         del history[0]
+
+
+def _maybe_report_progress(
+    scanned_rows: int,
+    progress_interval: int | None,
+    progress_callback: Callable[[int], None] | None,
+) -> None:
+    """Invoke a transaction-scan progress callback at configured intervals."""
+
+    if (
+        progress_callback is not None
+        and progress_interval is not None
+        and scanned_rows % progress_interval == 0
+    ):
+        progress_callback(scanned_rows)
 
 
 def _build_pair_counts(
