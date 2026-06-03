@@ -10,6 +10,7 @@ future two-tower/multimodal extension points.
    :caption: Project documents
 
    architecture
+   multimodal-two-tower-architecture
    spec-driven-development
    dependency-management
    api
