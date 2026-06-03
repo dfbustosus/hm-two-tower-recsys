@@ -344,6 +344,55 @@ class ProjectPaths:
             name = f"{name}_first_{max_target_customers}_customers"
         return self.artifacts_dir / "ranker-baselines" / f"{name}.json"
 
+    def learned_ranker_submission_path(
+        self,
+        k: int,
+        candidate_k: int,
+        lookback_days: int,
+        co_visitation_history_items: int | None = None,
+        co_visitation_neighbors_per_item: int | None = None,
+        config_slug: str | None = None,
+    ) -> Path:
+        """Return the default learned linear ranker submission CSV path.
+
+        Args:
+            k: Recommendation depth for each submission row.
+            candidate_k: Maximum candidates per source used for final ranking.
+            lookback_days: Recent popularity window length.
+            co_visitation_history_items: Optional co-visitation history length.
+            co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            config_slug: Optional filesystem-safe training config descriptor.
+
+        Returns:
+            Path under ``submissions/``.
+        """
+
+        name = (
+            f"learned_linear_ranker_lookback_{lookback_days}_"
+            f"candidate_k_{candidate_k}_rank_k_{k}"
+        )
+        if co_visitation_history_items is not None and co_visitation_neighbors_per_item is not None:
+            name = (
+                f"{name}_covis_h{co_visitation_history_items}_"
+                f"n{co_visitation_neighbors_per_item}"
+            )
+        if config_slug is not None:
+            name = f"{name}_{_safe_name(config_slug)}"
+        return self.submissions_dir / f"{name}.csv"
+
+    def learned_ranker_submission_report_path(self, submission_path: Path | str) -> Path:
+        """Return the default JSON report path for a learned-ranker submission.
+
+        Args:
+            submission_path: Submission CSV path whose stem is used in the report name.
+
+        Returns:
+            Path under ``artifacts/ranker-submissions/``.
+        """
+
+        stem = Path(submission_path).stem or "learned_ranker_submission"
+        return self.artifacts_dir / "ranker-submissions" / f"{_safe_name(stem)}.json"
+
 
 def _safe_name(value: str) -> str:
     """Return a filesystem-safe name derived from an arbitrary string."""
