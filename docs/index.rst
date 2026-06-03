@@ -11,6 +11,7 @@ future two-tower/multimodal extension points.
 
    architecture
    multimodal-two-tower-architecture
+   methodology
    spec-driven-development
    dependency-management
    api
