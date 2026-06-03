@@ -37,15 +37,26 @@ ROLLING_RANKER_NO_CO_VISITATION ?=
 TWO_TOWER_NEGATIVES_PER_POSITIVE ?= 1
 TWO_TOWER_SEED ?= 42
 TWO_TOWER_MAX_POSITIVE_EXAMPLES ?= 100000
+ARTICLE_CONTENT_OUTPUT ?=
+ARTICLE_CONTENT_REPORT ?=
+ARTICLE_CONTENT_MAX_ARTICLES ?=
+ARTICLE_CONTENT_PRIORITY_CUTOFF ?=
+ARTICLE_CONTENT_PRIORITY_LOOKBACK_DAYS ?=
 ARTICLE_EMBEDDING_PROVIDER ?= hf-clip
 ARTICLE_EMBEDDING_MODEL_ID ?= patrickjohncyh/fashion-clip
 ARTICLE_EMBEDDING_MODEL_REVISION ?= main
 ARTICLE_EMBEDDING_KIND ?= multimodal
 ARTICLE_EMBEDDING_BATCH_SIZE ?= 32
 ARTICLE_EMBEDDING_MAX_ARTICLES ?= 100
+ARTICLE_EMBEDDING_ARTICLE_CONTENT_PATH ?=
 CONTENT_SIMILARITY_MANIFEST ?= models/embeddings/articles/hf-clip_patrickjohncyh_fashion-clip_main/multimodal_manifest.json
 CONTENT_SIMILARITY_SOURCE ?= multimodal_similarity
 CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS ?= 1000
+CONTENT_SIMILARITY_POPULARITY_PRIOR_WEIGHT ?=
+CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS ?=
+CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE ?=
+LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST ?=
+LEARNED_RANKER_CONTENT_SIMILARITY_SOURCE ?= multimodal_similarity
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
@@ -160,12 +171,31 @@ image-inventory: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli inventory-article-images
 
 article-content-export: venv
-	"$(VENV_PYTHON)" -m hm_recsys.cli export-article-content
+	@extra_args=""; \
+	if [[ -n "$(ARTICLE_CONTENT_OUTPUT)" ]]; then \
+		extra_args="$$extra_args --output-path $(ARTICLE_CONTENT_OUTPUT)"; \
+	fi; \
+	if [[ -n "$(ARTICLE_CONTENT_REPORT)" ]]; then \
+		extra_args="$$extra_args --report-path $(ARTICLE_CONTENT_REPORT)"; \
+	fi; \
+	if [[ -n "$(ARTICLE_CONTENT_MAX_ARTICLES)" ]]; then \
+		extra_args="$$extra_args --max-articles $(ARTICLE_CONTENT_MAX_ARTICLES)"; \
+	fi; \
+	if [[ -n "$(ARTICLE_CONTENT_PRIORITY_CUTOFF)" ]]; then \
+		extra_args="$$extra_args --priority-cutoff $(ARTICLE_CONTENT_PRIORITY_CUTOFF)"; \
+	fi; \
+	if [[ -n "$(ARTICLE_CONTENT_PRIORITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --priority-lookback-days $(ARTICLE_CONTENT_PRIORITY_LOOKBACK_DAYS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-article-content $$extra_args
 
 article-embeddings: venv
 	@extra_args=""; \
 	if [[ -n "$(ARTICLE_EMBEDDING_MAX_ARTICLES)" ]]; then \
 		extra_args="$$extra_args --max-articles $(ARTICLE_EMBEDDING_MAX_ARTICLES)"; \
+	fi; \
+	if [[ -n "$(ARTICLE_EMBEDDING_ARTICLE_CONTENT_PATH)" ]]; then \
+		extra_args="$$extra_args --article-content-path $(ARTICLE_EMBEDDING_ARTICLE_CONTENT_PATH)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli generate-article-embeddings --provider "$(ARTICLE_EMBEDDING_PROVIDER)" --model-id "$(ARTICLE_EMBEDDING_MODEL_ID)" --model-revision "$(ARTICLE_EMBEDDING_MODEL_REVISION)" --embedding-kind "$(ARTICLE_EMBEDDING_KIND)" --batch-size "$(ARTICLE_EMBEDDING_BATCH_SIZE)" $$extra_args
 
@@ -174,6 +204,15 @@ content-similarity-diagnostics: venv
 	@extra_args=""; \
 	if [[ -n "$(CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS)" ]]; then \
 		extra_args="$$extra_args --max-target-customers $(CONTENT_SIMILARITY_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(CONTENT_SIMILARITY_POPULARITY_PRIOR_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --popularity-prior-weight $(CONTENT_SIMILARITY_POPULARITY_PRIOR_WEIGHT)"; \
+	fi; \
+	if [[ -n "$(CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --popularity-lookback-days $(CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE)" ]]; then \
+		extra_args="$$extra_args --candidate-pool-size $(CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli content-similarity-diagnostics --cutoff "$(CUTOFF)" --manifest-path "$(CONTENT_SIMILARITY_MANIFEST)" --source-name "$(CONTENT_SIMILARITY_SOURCE)" --evaluation-ks 12 50 100 $$extra_args
 
@@ -217,6 +256,18 @@ learned-ranker-baseline: venv
 	@extra_args=""; \
 	if [[ -n "$(LEARNED_RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
 		extra_args="$$extra_args --max-target-customers $(LEARNED_RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST)" ]]; then \
+		extra_args="$$extra_args --content-similarity-manifest-path $(LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST) --content-similarity-source-name $(LEARNED_RANKER_CONTENT_SIMILARITY_SOURCE)"; \
+	fi; \
+	if [[ -n "$(CONTENT_SIMILARITY_POPULARITY_PRIOR_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --content-similarity-popularity-prior-weight $(CONTENT_SIMILARITY_POPULARITY_PRIOR_WEIGHT)"; \
+	fi; \
+	if [[ -n "$(CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --content-similarity-popularity-lookback-days $(CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE)" ]]; then \
+		extra_args="$$extra_args --content-similarity-candidate-pool-size $(CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-learned-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(LEARNED_RANKER_CANDIDATE_K)" --k "$(LEARNED_RANKER_K)" --epochs "$(LEARNED_RANKER_EPOCHS)" --learning-rate "$(LEARNED_RANKER_LEARNING_RATE)" --l2 "$(LEARNED_RANKER_L2)" $$extra_args
 
