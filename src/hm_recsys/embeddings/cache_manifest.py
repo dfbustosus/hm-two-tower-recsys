@@ -182,3 +182,16 @@ def write_article_embedding_cache_manifest(
         json.dump(asdict(manifest_with_path), handle, indent=2, sort_keys=True)
         handle.write("\n")
     return manifest_with_path
+
+
+def read_article_embedding_cache_manifest(
+    manifest_path: Path | str,
+) -> ArticleEmbeddingCacheManifest:
+    """Read and validate an article embedding cache manifest JSON file."""
+
+    resolved_manifest_path = Path(manifest_path).expanduser().resolve()
+    with resolved_manifest_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{resolved_manifest_path} must contain a JSON object")
+    return ArticleEmbeddingCacheManifest(**payload)
