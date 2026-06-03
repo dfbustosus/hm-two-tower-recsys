@@ -393,6 +393,94 @@ class ProjectPaths:
         stem = Path(submission_path).stem or "learned_ranker_submission"
         return self.artifacts_dir / "ranker-submissions" / f"{_safe_name(stem)}.json"
 
+    def two_tower_examples_path(
+        self,
+        cutoff: str,
+        negatives_per_positive: int,
+        seed: int,
+        max_positive_examples: int | None = None,
+    ) -> Path:
+        """Return the default two-tower examples CSV path.
+
+        Args:
+            cutoff: Exclusive training cutoff date string.
+            negatives_per_positive: Requested negatives per positive pair.
+            seed: Deterministic negative-sampling seed.
+            max_positive_examples: Optional deterministic smoke-run cap.
+
+        Returns:
+            Path under ``artifacts/two-tower/``.
+        """
+
+        name = (
+            f"two_tower_examples_cutoff_{_safe_name(cutoff)}_"
+            f"neg{negatives_per_positive}_seed{seed}"
+        )
+        if max_positive_examples is not None:
+            name = f"{name}_first_{max_positive_examples}_positives"
+        return self.artifacts_dir / "two-tower" / f"{name}.csv"
+
+    def two_tower_customer_mapping_path(self, examples_path: Path | str) -> Path:
+        """Return the default customer mapping path for a two-tower export.
+
+        Args:
+            examples_path: Examples CSV path whose stem is used for the mapping name.
+
+        Returns:
+            Path under ``artifacts/two-tower/``.
+        """
+
+        stem = Path(examples_path).stem or "two_tower_examples"
+        return self.artifacts_dir / "two-tower" / f"{_safe_name(stem)}_customers.csv"
+
+    def two_tower_article_mapping_path(self, examples_path: Path | str) -> Path:
+        """Return the default article mapping path for a two-tower export.
+
+        Args:
+            examples_path: Examples CSV path whose stem is used for the mapping name.
+
+        Returns:
+            Path under ``artifacts/two-tower/``.
+        """
+
+        stem = Path(examples_path).stem or "two_tower_examples"
+        return self.artifacts_dir / "two-tower" / f"{_safe_name(stem)}_articles.csv"
+
+    def two_tower_example_export_report_path(self, examples_path: Path | str) -> Path:
+        """Return the default JSON report path for a two-tower examples export.
+
+        Args:
+            examples_path: Examples CSV path whose stem is used for the report name.
+
+        Returns:
+            Path under ``artifacts/two-tower/``.
+        """
+
+        stem = Path(examples_path).stem or "two_tower_examples"
+        return self.artifacts_dir / "two-tower" / f"{_safe_name(stem)}.json"
+
+    @property
+    def article_image_inventory_manifest_path(self) -> Path:
+        """Return the default article image inventory CSV path.
+
+        Returns:
+            Path under ``artifacts/multimodal/image-inventory/``.
+        """
+
+        inventory_dir = self.artifacts_dir / "multimodal" / "image-inventory"
+        return inventory_dir / "article_image_inventory.csv"
+
+    @property
+    def article_image_inventory_report_path(self) -> Path:
+        """Return the default article image inventory JSON report path.
+
+        Returns:
+            Path under ``artifacts/multimodal/image-inventory/``.
+        """
+
+        inventory_dir = self.artifacts_dir / "multimodal" / "image-inventory"
+        return inventory_dir / "article_image_inventory.json"
+
 
 def _safe_name(value: str) -> str:
     """Return a filesystem-safe name derived from an arbitrary string."""
