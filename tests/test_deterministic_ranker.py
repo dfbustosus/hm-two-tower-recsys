@@ -17,6 +17,7 @@ from hm_recsys.ranking.deterministic import (
 from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER, CandidateRecord
 from hm_recsys.retrieval.source_names import (
     CO_VISITATION_SOURCE,
+    MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
 )
@@ -32,6 +33,7 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
             CandidateRecord(CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
             CandidateRecord(CUSTOMER_ID, ARTICLE_1, RECENT_POPULARITY_SOURCE, 2, 0.5),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, CO_VISITATION_SOURCE, 1, 3.0),
+            CandidateRecord(CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 3, 0.8),
         ),
         validation_labels={CUSTOMER_ID: (ARTICLE_2,)},
     )
@@ -47,6 +49,8 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
     assert article_2.label == 1
     assert article_2.has_co_visitation
     assert article_2.co_visitation_score == 3.0
+    assert article_2.has_content_similarity
+    assert article_2.content_similarity_score == 0.8
 
 
 def test_deterministic_ranker_scoring_and_source_order_baseline() -> None:
@@ -77,6 +81,8 @@ def test_deterministic_ranker_scoring_and_source_order_baseline() -> None:
         repeat_score_weight=0.0,
         recent_popularity_presence_weight=10.0,
         recent_popularity_score_weight=0.0,
+        content_similarity_presence_weight=0.0,
+        content_similarity_score_weight=0.0,
     )
 
     assert score_candidate(features_by_customer[CUSTOMER_ID][ARTICLE_2], weights) > score_candidate(
