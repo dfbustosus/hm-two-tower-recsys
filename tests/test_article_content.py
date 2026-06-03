@@ -1,14 +1,16 @@
 import csv
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from hm_recsys.data.io import CsvSchemaError, CsvValueError
+from hm_recsys.data.io import CsvSchemaError, CsvValueError, TransactionEvent
 from hm_recsys.embeddings.article_content import (
     DEFAULT_ARTICLE_TEXT_FIELD_NAMES,
     ArticleContentRecord,
     article_content_record_to_row,
+    build_article_popularity_priority,
     combine_article_text_fields,
     iter_article_content_records,
     iter_article_content_records_from_csv,
@@ -71,6 +73,49 @@ def test_article_content_records_allow_missing_images_and_empty_text(tmp_path: P
     assert records[0].image_relative_path == ""
     assert records[0].image_exists is False
     assert records[0].to_embedding_input(raw_dir).image_path is None
+
+
+def test_article_content_records_can_be_priority_ordered_and_limited(tmp_path: Path) -> None:
+    raw_dir = tmp_path / "raw"
+    _write_articles(
+        raw_dir,
+        ("0108775015", "shirt", "Black", ""),
+        ("0201234567", "trousers", "Blue", ""),
+        ("0300000000", "dress", "Red", ""),
+    )
+
+    records = tuple(
+        iter_article_content_records(
+            raw_dir,
+            text_field_names=("prod_name", "colour_group_name", "detail_desc"),
+            article_id_order=("0300000000", "0108775015"),
+            max_articles=2,
+        )
+    )
+
+    assert tuple(record.article_id for record in records) == ("0300000000", "0108775015")
+
+
+def test_build_article_popularity_priority_is_cutoff_and_lookback_safe() -> None:
+    events = (
+        TransactionEvent(date(2020, 1, 1), "customer", "0108775015"),
+        TransactionEvent(date(2020, 1, 2), "customer", "0108775015"),
+        TransactionEvent(date(2020, 1, 3), "customer", "0201234567"),
+        TransactionEvent(date(2020, 1, 4), "customer", "0300000000"),
+    )
+
+    assert build_article_popularity_priority(events, cutoff=date(2020, 1, 4)) == (
+        "0108775015",
+        "0201234567",
+    )
+    assert build_article_popularity_priority(
+        events,
+        cutoff=date(2020, 1, 4),
+        lookback_days=1,
+    ) == ("0201234567",)
+
+    with pytest.raises(ValueError, match="cutoff"):
+        build_article_popularity_priority(events, lookback_days=7)
 
 
 def test_article_content_records_validate_article_schema_and_ids(tmp_path: Path) -> None:
@@ -182,6 +227,8 @@ def test_article_content_export_rejects_invalid_field_config(tmp_path: Path) -> 
             report_path=tmp_path / "out.json",
             max_examples=-1,
         )
+    with pytest.raises(ValueError, match="max_articles"):
+        tuple(iter_article_content_records(raw_dir, max_articles=0))
 
 
 def test_iter_article_content_records_from_csv_rejects_invalid_header_and_boolean(
