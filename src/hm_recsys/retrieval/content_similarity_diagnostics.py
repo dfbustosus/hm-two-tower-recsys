@@ -54,6 +54,9 @@ class ContentSimilarityDiagnosticsReport:
     evaluation_ks: tuple[int, ...]
     max_history_items: int
     exclude_history: bool
+    popularity_prior_weight: float
+    popularity_lookback_days: int | None
+    candidate_pool_size: int | None
     index_train_rows_used: int
     rows_with_embedding_history: int
     rows_with_candidates: int
@@ -76,6 +79,9 @@ def evaluate_cached_content_similarity(
     evaluation_ks: Sequence[int] = DEFAULT_CONTENT_SIMILARITY_EVALUATION_KS,
     max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     exclude_history: bool = True,
+    popularity_prior_weight: float = 0.0,
+    popularity_lookback_days: int | None = None,
+    candidate_pool_size: int | None = None,
     max_target_customers: int | None = None,
 ) -> ContentSimilarityDiagnosticsReport:
     """Evaluate a cached embedding source on leakage-safe validation labels."""
@@ -109,6 +115,9 @@ def evaluate_cached_content_similarity(
         source_name=source_name,
         max_history_items=max_history_items,
         exclude_history=exclude_history,
+        popularity_prior_weight=popularity_prior_weight,
+        popularity_lookback_days=popularity_lookback_days,
+        candidate_pool_size=candidate_pool_size,
     )
     predictions: dict[str, tuple[str, ...]] = {}
     candidate_counts: list[int] = []
@@ -145,6 +154,9 @@ def evaluate_cached_content_similarity(
         evaluation_ks=normalized_ks,
         max_history_items=max_history_items,
         exclude_history=exclude_history,
+        popularity_prior_weight=popularity_prior_weight,
+        popularity_lookback_days=popularity_lookback_days,
+        candidate_pool_size=candidate_pool_size,
         index_train_rows_used=index.train_rows_used,
         rows_with_embedding_history=len(index.customer_histories),
         rows_with_candidates=rows_with_candidates,
