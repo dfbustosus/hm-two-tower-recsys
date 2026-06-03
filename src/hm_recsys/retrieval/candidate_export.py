@@ -316,36 +316,68 @@ def _iter_candidate_records(
     """Yield source-specific candidate records in deterministic source order."""
 
     for customer_id in target_customer_ids:
-        yield from _ranked_article_records(
+        yield from iter_candidate_records_for_customer(
             customer_id=customer_id,
-            source=REPEAT_SOURCE,
-            article_ids=repeat_recommendations.get(customer_id, ())[:k],
+            repeat_recommendations=repeat_recommendations,
+            recent_popularity=recent_popularity,
+            all_time_popularity=all_time_popularity,
+            co_visitation_index=co_visitation_index,
+            k=k,
         )
-        yield from _ranked_article_records(
-            customer_id=customer_id,
-            source=RECENT_POPULARITY_SOURCE,
-            article_ids=recent_popularity[:k],
-        )
-        yield from _ranked_article_records(
-            customer_id=customer_id,
-            source=ALL_TIME_POPULARITY_SOURCE,
-            article_ids=all_time_popularity[:k],
-        )
-        if co_visitation_index is not None:
-            yield from (
-                CandidateRecord(
-                    customer_id=customer_id,
-                    article_id=candidate.article_id,
-                    source=CO_VISITATION_SOURCE,
-                    source_rank=candidate.rank,
-                    source_score=candidate.score,
-                )
-                for candidate in build_co_visitation_candidate_records(
-                    co_visitation_index,
-                    customer_id,
-                    k=k,
-                )
+
+
+def iter_candidate_records_for_customer(
+    customer_id: str,
+    repeat_recommendations: Mapping[str, tuple[str, ...]],
+    recent_popularity: Sequence[str],
+    all_time_popularity: Sequence[str],
+    co_visitation_index: CoVisitationIndex | None,
+    k: int,
+) -> Iterable[CandidateRecord]:
+    """Yield ranker-ready source rows for one customer.
+
+    Args:
+        customer_id: Customer requiring candidate records.
+        repeat_recommendations: Customer-specific repeat-purchase rankings.
+        recent_popularity: Global recent-popularity ranking.
+        all_time_popularity: Global all-time popularity ranking.
+        co_visitation_index: Optional co-visitation index for item-item rows.
+        k: Maximum candidates emitted per source.
+
+    Yields:
+        Source-specific candidate records in deterministic source order.
+    """
+
+    yield from _ranked_article_records(
+        customer_id=customer_id,
+        source=REPEAT_SOURCE,
+        article_ids=repeat_recommendations.get(customer_id, ())[:k],
+    )
+    yield from _ranked_article_records(
+        customer_id=customer_id,
+        source=RECENT_POPULARITY_SOURCE,
+        article_ids=recent_popularity[:k],
+    )
+    yield from _ranked_article_records(
+        customer_id=customer_id,
+        source=ALL_TIME_POPULARITY_SOURCE,
+        article_ids=all_time_popularity[:k],
+    )
+    if co_visitation_index is not None:
+        yield from (
+            CandidateRecord(
+                customer_id=customer_id,
+                article_id=candidate.article_id,
+                source=CO_VISITATION_SOURCE,
+                source_rank=candidate.rank,
+                source_score=candidate.score,
             )
+            for candidate in build_co_visitation_candidate_records(
+                co_visitation_index,
+                customer_id,
+                k=k,
+            )
+        )
 
 
 def _ranked_article_records(
