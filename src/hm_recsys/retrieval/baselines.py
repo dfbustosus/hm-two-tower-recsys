@@ -228,6 +228,8 @@ def build_repeat_popularity_candidate_sources(
     target_customer_ids: Iterable[str],
     k: int = 12,
     popularity_lookback_days: int = 7,
+    progress_interval: int | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> BaselineCandidateSources:
     """Build source rankings without materializing final predictions per customer.
 
@@ -238,6 +240,8 @@ def build_repeat_popularity_candidate_sources(
         k: Maximum per-customer repeat ranking depth.
         popularity_lookback_days: Number of days before cutoff used for recent
             popularity.
+        progress_interval: Optional transaction-row interval for progress callbacks.
+        progress_callback: Optional callback receiving scanned transaction rows.
 
     Returns:
         Repeat and popularity source rankings plus training counts.
@@ -250,6 +254,8 @@ def build_repeat_popularity_candidate_sources(
         raise ValueError("k must be positive")
     if popularity_lookback_days <= 0:
         raise ValueError("popularity_lookback_days must be positive")
+    if progress_interval is not None and progress_interval <= 0:
+        raise ValueError("progress_interval must be positive when provided")
 
     target_customer_set = set(target_customer_ids)
     recent_start = split.cutoff - timedelta(days=popularity_lookback_days)
@@ -258,9 +264,11 @@ def build_repeat_popularity_candidate_sources(
     repeat_stats: dict[str, dict[str, ArticleStats]] = {}
     customer_train_purchase_counts: dict[str, int] = {}
     train_rows_used = 0
+    scanned_rows = 0
 
-    for transaction in transactions:
+    for scanned_rows, transaction in enumerate(transactions, start=1):
         if transaction.t_dat >= split.cutoff:
+            _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
             continue
         train_rows_used += 1
         _update_article_stats(all_time_popularity_stats, transaction.article_id, transaction.t_dat)
@@ -274,6 +282,14 @@ def build_repeat_popularity_candidate_sources(
             )
             customer_stats = repeat_stats.setdefault(transaction.customer_id, {})
             _update_article_stats(customer_stats, transaction.article_id, transaction.t_dat)
+        _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
+    if (
+        progress_callback is not None
+        and progress_interval is not None
+        and scanned_rows
+        and scanned_rows % progress_interval != 0
+    ):
+        progress_callback(scanned_rows)
 
     recent_popularity = rank_article_stats(
         recent_popularity_stats, limit=max(k, len(recent_popularity_stats))
@@ -414,11 +430,17 @@ def build_repeat_popularity_submission_baseline(
     )
 
 
-def find_max_transaction_date(transactions: Iterable[TransactionEvent]) -> date:
+def find_max_transaction_date(
+    transactions: Iterable[TransactionEvent],
+    progress_interval: int | None = None,
+    progress_callback: Callable[[int], None] | None = None,
+) -> date:
     """Find the latest transaction date in an iterable of events.
 
     Args:
         transactions: Transaction events to scan.
+        progress_interval: Optional transaction-row interval for progress callbacks.
+        progress_callback: Optional callback receiving scanned transaction rows.
 
     Returns:
         Maximum observed transaction date.
@@ -427,9 +449,21 @@ def find_max_transaction_date(transactions: Iterable[TransactionEvent]) -> date:
         ValueError: If ``transactions`` is empty.
     """
 
+    if progress_interval is not None and progress_interval <= 0:
+        raise ValueError("progress_interval must be positive when provided")
+
     max_date: date | None = None
-    for transaction in transactions:
+    scanned_rows = 0
+    for scanned_rows, transaction in enumerate(transactions, start=1):
         max_date = transaction.t_dat if max_date is None else max(max_date, transaction.t_dat)
+        _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
+    if (
+        progress_callback is not None
+        and progress_interval is not None
+        and scanned_rows
+        and scanned_rows % progress_interval != 0
+    ):
+        progress_callback(scanned_rows)
     if max_date is None:
         raise ValueError("cannot build a submission baseline without transactions")
     return max_date
@@ -536,6 +570,21 @@ def _update_article_stats(stats: dict[str, ArticleStats], article_id: str, seen_
 
     article_stats = stats.setdefault(article_id, ArticleStats())
     article_stats.update(seen_date)
+
+
+def _maybe_report_progress(
+    scanned_rows: int,
+    progress_interval: int | None,
+    progress_callback: Callable[[int], None] | None,
+) -> None:
+    """Invoke a transaction-scan progress callback at configured intervals."""
+
+    if (
+        progress_callback is not None
+        and progress_interval is not None
+        and scanned_rows % progress_interval == 0
+    ):
+        progress_callback(scanned_rows)
 
 
 def merge_ranked_sources(sources: Iterable[Iterable[str]], k: int) -> tuple[str, ...]:
