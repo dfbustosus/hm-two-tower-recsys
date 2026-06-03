@@ -70,7 +70,10 @@ def test_linear_ranker_submission_predictions_backfill_and_preserve_scope() -> N
 
 
 def test_linear_ranker_submission_rejects_invalid_limits() -> None:
-    model = LinearRankerModel(feature_names=LINEAR_FEATURE_NAMES, weights=(0.0,) * 15)
+    model = LinearRankerModel(
+        feature_names=LINEAR_FEATURE_NAMES,
+        weights=(0.0,) * len(LINEAR_FEATURE_NAMES),
+    )
 
     with pytest.raises(ValueError, match="k must be positive"):
         build_linear_ranker_submission_predictions(
@@ -84,7 +87,10 @@ def test_linear_ranker_submission_rejects_invalid_limits() -> None:
 
 def test_write_learned_linear_ranker_submission_report(tmp_path: Path) -> None:
     config = LinearRankerConfig(epochs=1, learning_rate=0.1)
-    model = LinearRankerModel(feature_names=LINEAR_FEATURE_NAMES, weights=(0.0,) * 15)
+    model = LinearRankerModel(
+        feature_names=LINEAR_FEATURE_NAMES,
+        weights=(0.0,) * len(LINEAR_FEATURE_NAMES),
+    )
     validation = SubmissionValidationResult(
         path=str(tmp_path / "submission.csv"),
         valid=True,
