@@ -12,7 +12,8 @@ components now cover H&M data-contract validation, safe string-ID CSV loading,
 temporal split summaries, MAP@12/recall metrics, submission validation,
 repeat-plus-popularity baselines, candidate-source diagnostics, co-visitation
 retrieval, ranker-ready candidate exports, deterministic ranking, learned linear
-ranking, and rolling-window ranker validation.
+ranking, rolling-window ranker validation, and learned-ranker submission
+generation.
 
 ## Project structure
 
@@ -21,7 +22,7 @@ ranking, and rolling-window ranker validation.
   - `data/`: data contracts and safe CSV/string-ID loading.
   - `evaluation/`: temporal splits, MAP@12/recall metrics, and submission validation.
   - `retrieval/`: candidate generation and retrieval baselines.
-  - `ranking/`: deterministic, learned linear, and rolling-window ranker evaluation.
+  - `ranking/`: deterministic, learned linear, rolling-window evaluation, and ranker submission generation.
   - `embeddings/`: provider contracts and factories for text, image, and multimodal embeddings.
   - `indexing/`: vector-index contracts and factories for retrieval pipelines.
   - `training/`: training configuration contracts, including two-tower retrieval.
@@ -284,6 +285,22 @@ Reports are written under:
 
 ```text
 artifacts/ranker-baselines/
+```
+
+Generate and validate a full learned-linear-ranker submission after rolling
+validation promotes it:
+
+```bash
+make learned-ranker-submission
+```
+
+This trains on the latest available 7-day label window, uses all official
+training transactions for final candidate features, writes the CSV under ignored
+`submissions/`, validates it against `sample_submission.csv` and `articles.csv`,
+and writes a reproducibility report under:
+
+```text
+artifacts/ranker-submissions/
 ```
 
 ## Next implementation gate
