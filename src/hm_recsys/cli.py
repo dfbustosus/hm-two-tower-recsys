@@ -6,6 +6,7 @@ import argparse
 from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 from hm_recsys.data.contracts import validate_hm_data_contract, write_data_contract_report
 from hm_recsys.data.io import (
@@ -15,6 +16,11 @@ from hm_recsys.data.io import (
     load_submission_customer_ids_in_order,
 )
 from hm_recsys.embeddings.article_content import write_article_content_export
+from hm_recsys.embeddings.cache_manifest import EmbeddingCacheKind
+from hm_recsys.embeddings.generation import (
+    ArticleEmbeddingCacheWriteConfig,
+    write_article_embedding_cache_from_content_export,
+)
 from hm_recsys.embeddings.image_inventory import write_article_image_inventory
 from hm_recsys.evaluation.submission import (
     validate_submission_file,
@@ -69,6 +75,12 @@ from hm_recsys.retrieval.co_visitation import (
     DEFAULT_MAX_HISTORY_ITEMS,
     DEFAULT_MAX_NEIGHBORS_PER_ITEM,
 )
+from hm_recsys.retrieval.content_similarity_diagnostics import (
+    DEFAULT_CONTENT_SIMILARITY_EVALUATION_KS,
+    evaluate_cached_content_similarity,
+    write_content_similarity_diagnostics_report,
+)
+from hm_recsys.retrieval.source_names import MULTIMODAL_SIMILARITY_SOURCE
 from hm_recsys.training.two_tower_export import (
     TwoTowerExampleExportConfig,
     write_two_tower_example_export,
@@ -527,6 +539,87 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum missing-image/empty-text examples retained in the JSON report.",
     )
     article_content_parser.set_defaults(handler=_handle_export_article_content)
+
+    article_embedding_parser = subparsers.add_parser(
+        "generate-article-embeddings",
+        help="Generate cached article embeddings with an optional open-source provider.",
+    )
+    article_embedding_parser.add_argument("--project-root", type=Path, default=None)
+    article_embedding_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    article_embedding_parser.add_argument(
+        "--provider",
+        choices=("hf-clip",),
+        default="hf-clip",
+        help="Embedding provider backend. hf-clip uses transformers AutoModel/AutoProcessor.",
+    )
+    article_embedding_parser.add_argument(
+        "--model-id",
+        default="patrickjohncyh/fashion-clip",
+        help="Open-source HuggingFace model ID. Defaults to FashionCLIP.",
+    )
+    article_embedding_parser.add_argument("--model-revision", default="main")
+    article_embedding_parser.add_argument(
+        "--embedding-kind",
+        choices=("image", "text", "multimodal"),
+        default="multimodal",
+    )
+    article_embedding_parser.add_argument("--device", default="auto")
+    article_embedding_parser.add_argument("--batch-size", type=int, default=32)
+    article_embedding_parser.add_argument(
+        "--max-articles",
+        type=int,
+        default=None,
+        help="Optional deterministic cap for smoke embedding generation.",
+    )
+    article_embedding_parser.add_argument("--article-content-path", type=Path, default=None)
+    article_embedding_parser.add_argument("--embeddings-path", type=Path, default=None)
+    article_embedding_parser.add_argument("--article-mapping-path", type=Path, default=None)
+    article_embedding_parser.add_argument("--manifest-path", type=Path, default=None)
+    article_embedding_parser.add_argument(
+        "--preprocessing",
+        default=(
+            "HuggingFace AutoProcessor defaults; JSONL float vectors; "
+            "multimodal vectors average available text/image embeddings"
+        ),
+    )
+    article_embedding_parser.add_argument(
+        "--license-note",
+        default="Check upstream HuggingFace model card/license before competition use.",
+    )
+    article_embedding_parser.set_defaults(handler=_handle_generate_article_embeddings)
+
+    content_similarity_parser = subparsers.add_parser(
+        "content-similarity-diagnostics",
+        help="Evaluate cached article embeddings as a leakage-safe content candidate source.",
+    )
+    content_similarity_parser.add_argument("--cutoff", required=True, help="YYYY-MM-DD")
+    content_similarity_parser.add_argument("--horizon-days", type=int, default=7)
+    content_similarity_parser.add_argument("--manifest-path", type=Path, required=True)
+    content_similarity_parser.add_argument(
+        "--source-name",
+        default=MULTIMODAL_SIMILARITY_SOURCE,
+    )
+    content_similarity_parser.add_argument(
+        "--evaluation-ks",
+        type=int,
+        nargs="+",
+        default=list(DEFAULT_CONTENT_SIMILARITY_EVALUATION_KS),
+    )
+    content_similarity_parser.add_argument(
+        "--max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+    )
+    content_similarity_parser.add_argument(
+        "--include-history",
+        action="store_true",
+        help="Do not filter articles already present in the customer's pre-cutoff history.",
+    )
+    content_similarity_parser.add_argument("--max-target-customers", type=int, default=None)
+    content_similarity_parser.add_argument("--project-root", type=Path, default=None)
+    content_similarity_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    content_similarity_parser.add_argument("--report-path", type=Path, default=None)
+    content_similarity_parser.set_defaults(handler=_handle_content_similarity_diagnostics)
     return parser
 
 
@@ -1634,6 +1727,127 @@ def _handle_export_article_content(args: argparse.Namespace) -> int:
     print(f"Empty combined-text records: {summary.empty_combined_text_count}")
     print(f"Content CSV written to: {summary.output_path}")
     print(f"Summary report written to: {summary.report_path}")
+    return 0
+
+
+def _handle_generate_article_embeddings(args: argparse.Namespace) -> int:
+    """Handle the ``generate-article-embeddings`` subcommand."""
+
+    paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
+    article_content_path = args.article_content_path or paths.article_content_export_path
+    article_content_path = _resolve_path_under_root(paths, article_content_path)
+    provider_slug = f"{args.provider}_{args.model_id}_{args.model_revision}"
+    embeddings_path = args.embeddings_path or paths.article_embedding_cache_embeddings_path(
+        provider_slug,
+        args.embedding_kind,
+        "jsonl",
+    )
+    embeddings_path = _resolve_path_under_root(paths, embeddings_path)
+    article_mapping_path = args.article_mapping_path or paths.article_embedding_cache_mapping_path(
+        provider_slug,
+        args.embedding_kind,
+    )
+    article_mapping_path = _resolve_path_under_root(paths, article_mapping_path)
+    manifest_path = args.manifest_path or paths.article_embedding_cache_manifest_path(
+        provider_slug,
+        args.embedding_kind,
+    )
+    manifest_path = _resolve_path_under_root(paths, manifest_path)
+
+    if args.provider != "hf-clip":
+        raise ValueError(f"unsupported provider: {args.provider!r}")
+    from hm_recsys.embeddings.providers.huggingface_clip import (
+        HuggingFaceClipArticleEmbeddingProvider,
+    )
+
+    print(
+        "Generating article embeddings: "
+        f"provider={args.provider}, model_id={args.model_id}, "
+        f"embedding_kind={args.embedding_kind}, batch_size={args.batch_size}, "
+        f"max_articles={args.max_articles}",
+        flush=True,
+    )
+    provider = HuggingFaceClipArticleEmbeddingProvider(
+        model_id=args.model_id,
+        revision=args.model_revision,
+        embedding_kind=cast(EmbeddingCacheKind, args.embedding_kind),
+        device=args.device,
+    )
+    config = ArticleEmbeddingCacheWriteConfig(
+        provider_model_id=args.model_id,
+        provider_model_revision=args.model_revision,
+        embedding_kind=cast(EmbeddingCacheKind, args.embedding_kind),
+        preprocessing=args.preprocessing,
+        license=args.license_note,
+        batch_size=args.batch_size,
+        max_articles=args.max_articles,
+        source_image_inventory_path=paths.article_image_inventory_manifest_path,
+    )
+    summary = write_article_embedding_cache_from_content_export(
+        provider,
+        raw_data_dir=paths.raw_data_dir,
+        article_content_path=article_content_path,
+        embeddings_path=embeddings_path,
+        article_mapping_path=article_mapping_path,
+        manifest_path=manifest_path,
+        config=config,
+    )
+
+    print(f"Article content path: {summary.source_article_content_path}")
+    print(f"Articles processed: {summary.article_count}")
+    print(f"Embeddings written: {summary.embedding_count}")
+    print(f"Missing embeddings: {summary.missing_embedding_count}")
+    print(f"Missing-image rows skipped: {summary.skipped_missing_image_count}")
+    print(f"Embeddings JSONL written to: {summary.embeddings_path}")
+    print(f"Article mapping written to: {summary.article_mapping_path}")
+    print(f"Manifest written to: {summary.manifest_path}")
+    return 0
+
+
+def _handle_content_similarity_diagnostics(args: argparse.Namespace) -> int:
+    """Handle the ``content-similarity-diagnostics`` subcommand."""
+
+    paths = ProjectPaths.from_root(args.project_root, raw_data_dir=args.raw_data_dir)
+    split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    manifest_path = _resolve_path_under_root(paths, args.manifest_path)
+    report_path = args.report_path or paths.content_similarity_diagnostics_report_path(
+        cutoff=args.cutoff,
+        source_name=args.source_name,
+        max_target_customers=args.max_target_customers,
+    )
+    report_path = _resolve_path_under_root(paths, report_path)
+    submission_customer_ids = load_submission_customer_ids(paths.raw_data_dir)
+
+    print(
+        "Evaluating cached content-similarity source: "
+        f"cutoff={args.cutoff}, manifest={manifest_path}, "
+        f"source={args.source_name}, max_target_customers={args.max_target_customers}",
+        flush=True,
+    )
+    report = evaluate_cached_content_similarity(
+        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        split=split,
+        submission_customer_ids=submission_customer_ids,
+        manifest_path=manifest_path,
+        source_name=args.source_name,
+        evaluation_ks=tuple(args.evaluation_ks),
+        max_history_items=args.max_history_items,
+        exclude_history=not args.include_history,
+        max_target_customers=args.max_target_customers,
+    )
+    written_report_path = write_content_similarity_diagnostics_report(report, report_path)
+
+    print(f"Provider: {report.provider_name}")
+    print(f"Embedding kind: {report.embedding_kind}")
+    print(f"Embeddings loaded: {report.embedding_count}")
+    print(f"Target customers: {report.target_customers}")
+    print(f"Customers with embedding history: {report.rows_with_embedding_history}")
+    print(f"Rows with candidates: {report.rows_with_candidates}")
+    print(f"Candidate coverage: {report.candidate_coverage:.6f}")
+    print(f"MAP@12: {report.map_at_12:.8f}")
+    for k, value in report.recall_at_k.items():
+        print(f"Recall@{k}: {value:.8f}")
+    print(f"Diagnostics report written to: {written_report_path}")
     return 0
 
 
