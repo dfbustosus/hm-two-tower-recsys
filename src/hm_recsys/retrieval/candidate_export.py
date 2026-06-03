@@ -13,6 +13,8 @@ from time import perf_counter
 from typing import Any
 
 from hm_recsys.data.io import TransactionEvent
+from hm_recsys.embeddings.cache_io import load_article_embedding_cache
+from hm_recsys.embeddings.cache_manifest import read_article_embedding_cache_manifest
 from hm_recsys.evaluation.temporal import (
     TemporalSplit,
     TemporalSplitSummary,
@@ -26,9 +28,15 @@ from hm_recsys.retrieval.co_visitation import (
     build_co_visitation_candidate_records,
     build_co_visitation_index,
 )
+from hm_recsys.retrieval.content_similarity import (
+    ContentSimilarityIndex,
+    build_content_similarity_candidate_source_records,
+    build_content_similarity_index,
+)
 from hm_recsys.retrieval.source_names import (
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
 )
@@ -79,6 +87,12 @@ class CandidateExportSummary:
         include_co_visitation: Whether co-visitation rows were exported.
         co_visitation_max_history_items: Co-visitation customer-history length.
         co_visitation_max_neighbors_per_item: Co-visitation neighbor cap per item.
+        content_similarity_manifest_path: Optional cached embedding manifest path.
+        content_similarity_source_name: Source name for content-similarity rows.
+        content_similarity_max_history_items: Customer-history length for content queries.
+        content_similarity_popularity_prior_weight: Popularity-prior blend weight.
+        content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+        content_similarity_candidate_pool_size: Optional content neighbor pool size.
         rows_written: Number of CSV data rows written.
         source_row_counts: Row counts by source.
         output_path: Candidate CSV path.
@@ -98,6 +112,12 @@ class CandidateExportSummary:
     include_co_visitation: bool
     co_visitation_max_history_items: int
     co_visitation_max_neighbors_per_item: int
+    content_similarity_manifest_path: str | None
+    content_similarity_source_name: str | None
+    content_similarity_max_history_items: int | None
+    content_similarity_popularity_prior_weight: float | None
+    content_similarity_popularity_lookback_days: int | None
+    content_similarity_candidate_pool_size: int | None
     rows_written: int
     source_row_counts: dict[str, int]
     output_path: str
@@ -115,6 +135,13 @@ def write_validation_candidate_export(
     include_co_visitation: bool = True,
     co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    content_similarity_manifest_path: Path | str | None = None,
+    content_similarity_source_name: str = MULTIMODAL_SIMILARITY_SOURCE,
+    content_similarity_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    content_similarity_exclude_history: bool = True,
+    content_similarity_popularity_prior_weight: float = 0.0,
+    content_similarity_popularity_lookback_days: int | None = None,
+    content_similarity_candidate_pool_size: int | None = None,
     max_target_customers: int | None = None,
 ) -> CandidateExportSummary:
     """Write ranker-ready candidates for validation-label customers.
@@ -136,6 +163,19 @@ def write_validation_candidate_export(
         co_visitation_max_history_items: Recent unique customer-history length
             used by co-visitation.
         co_visitation_max_neighbors_per_item: Maximum neighbors retained per item.
+        content_similarity_manifest_path: Optional embedding-cache manifest used to
+            export content-similarity rows.
+        content_similarity_source_name: Source label for content rows.
+        content_similarity_max_history_items: Recent unique customer-history length
+            used for content query vectors.
+        content_similarity_exclude_history: Whether content retrieval filters
+            articles already in pre-cutoff customer history.
+        content_similarity_popularity_prior_weight: Popularity-prior blend weight
+            for content candidate reranking.
+        content_similarity_popularity_lookback_days: Optional pre-cutoff lookback
+            used to compute content popularity priors.
+        content_similarity_candidate_pool_size: Optional content neighbor pool size
+            before popularity-prior reranking.
         max_target_customers: Optional deterministic cap for smoke runs.
 
     Returns:
@@ -151,6 +191,10 @@ def write_validation_candidate_export(
         raise ValueError("popularity_lookback_days must be positive")
     if max_target_customers is not None and max_target_customers <= 0:
         raise ValueError("max_target_customers must be positive when provided")
+    if content_similarity_manifest_path is not None and not content_similarity_source_name:
+        raise ValueError("content_similarity_source_name must not be empty")
+    if content_similarity_manifest_path is not None and content_similarity_max_history_items <= 0:
+        raise ValueError("content_similarity_max_history_items must be positive")
 
     started_at = perf_counter()
     validation_data = summarize_temporal_split_with_labels(transaction_iter_factory(), split)
@@ -178,6 +222,22 @@ def write_validation_candidate_export(
         if include_co_visitation
         else None
     )
+    content_similarity_index = (
+        _build_content_similarity_index_from_manifest(
+            transaction_iter_factory=transaction_iter_factory,
+            split=split,
+            target_customer_ids=target_customer_ids,
+            manifest_path=content_similarity_manifest_path,
+            source_name=content_similarity_source_name,
+            max_history_items=content_similarity_max_history_items,
+            exclude_history=content_similarity_exclude_history,
+            popularity_prior_weight=content_similarity_popularity_prior_weight,
+            popularity_lookback_days=content_similarity_popularity_lookback_days,
+            candidate_pool_size=content_similarity_candidate_pool_size,
+        )
+        if content_similarity_manifest_path is not None
+        else None
+    )
 
     resolved_output_path = Path(output_path).expanduser().resolve()
     resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,6 +252,7 @@ def write_validation_candidate_export(
             recent_popularity=baseline_sources.recent_popularity[:k],
             all_time_popularity=baseline_sources.all_time_popularity[:k],
             co_visitation_index=co_visitation_index,
+            content_similarity_index=content_similarity_index,
             k=k,
         ):
             writer.writerow(candidate_record_to_row(record))
@@ -211,6 +272,34 @@ def write_validation_candidate_export(
         include_co_visitation=include_co_visitation,
         co_visitation_max_history_items=co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+        content_similarity_manifest_path=(
+            str(Path(content_similarity_manifest_path).expanduser().resolve())
+            if content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_source_name=(
+            content_similarity_source_name if content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_max_history_items=(
+            content_similarity_max_history_items
+            if content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_prior_weight=(
+            content_similarity_popularity_prior_weight
+            if content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            content_similarity_popularity_lookback_days
+            if content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            content_similarity_candidate_pool_size
+            if content_similarity_manifest_path is not None
+            else None
+        ),
         rows_written=rows_written,
         source_row_counts=dict(sorted(source_row_counts.items())),
         output_path=str(resolved_output_path),
@@ -312,6 +401,7 @@ def _iter_candidate_records(
     all_time_popularity: Sequence[str],
     co_visitation_index: CoVisitationIndex | None,
     k: int,
+    content_similarity_index: ContentSimilarityIndex | None = None,
 ) -> Iterable[CandidateRecord]:
     """Yield source-specific candidate records in deterministic source order."""
 
@@ -322,6 +412,7 @@ def _iter_candidate_records(
             recent_popularity=recent_popularity,
             all_time_popularity=all_time_popularity,
             co_visitation_index=co_visitation_index,
+            content_similarity_index=content_similarity_index,
             k=k,
         )
 
@@ -333,6 +424,7 @@ def iter_candidate_records_for_customer(
     all_time_popularity: Sequence[str],
     co_visitation_index: CoVisitationIndex | None,
     k: int,
+    content_similarity_index: ContentSimilarityIndex | None = None,
 ) -> Iterable[CandidateRecord]:
     """Yield ranker-ready source rows for one customer.
 
@@ -343,6 +435,7 @@ def iter_candidate_records_for_customer(
         all_time_popularity: Global all-time popularity ranking.
         co_visitation_index: Optional co-visitation index for item-item rows.
         k: Maximum candidates emitted per source.
+        content_similarity_index: Optional cached content embedding index.
 
     Yields:
         Source-specific candidate records in deterministic source order.
@@ -378,6 +471,40 @@ def iter_candidate_records_for_customer(
                 k=k,
             )
         )
+    if content_similarity_index is not None:
+        yield from build_content_similarity_candidate_source_records(
+            content_similarity_index,
+            customer_id,
+            k=k,
+        )
+
+
+def _build_content_similarity_index_from_manifest(
+    transaction_iter_factory: Callable[[], Iterable[TransactionEvent]],
+    split: TemporalSplit,
+    target_customer_ids: Sequence[str],
+    manifest_path: Path | str,
+    source_name: str,
+    max_history_items: int,
+    exclude_history: bool,
+    popularity_prior_weight: float,
+    popularity_lookback_days: int | None,
+    candidate_pool_size: int | None,
+) -> ContentSimilarityIndex:
+    manifest = read_article_embedding_cache_manifest(manifest_path)
+    embedding_records = load_article_embedding_cache(manifest)
+    return build_content_similarity_index(
+        transactions=transaction_iter_factory(),
+        split=split,
+        target_customer_ids=target_customer_ids,
+        embedding_records=embedding_records,
+        source_name=source_name,
+        max_history_items=max_history_items,
+        exclude_history=exclude_history,
+        popularity_prior_weight=popularity_prior_weight,
+        popularity_lookback_days=popularity_lookback_days,
+        candidate_pool_size=candidate_pool_size,
+    )
 
 
 def _ranked_article_records(
