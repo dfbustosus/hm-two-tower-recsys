@@ -20,7 +20,11 @@ from hm_recsys.ranking.linear import (
     write_learned_linear_ranker_report,
 )
 from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER
-from hm_recsys.retrieval.source_names import RECENT_POPULARITY_SOURCE, REPEAT_SOURCE
+from hm_recsys.retrieval.source_names import (
+    MULTIMODAL_SIMILARITY_SOURCE,
+    RECENT_POPULARITY_SOURCE,
+    REPEAT_SOURCE,
+)
 
 CUSTOMER_ID = "a" * 64
 SECOND_CUSTOMER_ID = "b" * 64
@@ -43,6 +47,8 @@ def test_feature_vector_matches_schema() -> None:
         article_id=ARTICLE_1,
         repeat_rank=2,
         repeat_score=0.5,
+        content_similarity_rank=1,
+        content_similarity_score=0.8,
         source_count=1,
         best_rank=2,
     )
@@ -53,6 +59,9 @@ def test_feature_vector_matches_schema() -> None:
     assert vector[0] == 1.0
     assert vector[1] == 1.0
     assert vector[3] == pytest.approx(0.5)
+    assert LINEAR_FEATURE_NAMES[-5] == "has_content_similarity"
+    assert vector[-5] == 1.0
+    assert vector[-4] == pytest.approx(0.8)
 
 
 def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
@@ -61,8 +70,10 @@ def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
     rows = [
         (CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
         (CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0),
+        (CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 1, 0.9),
         (SECOND_CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
         (SECOND_CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0),
+        (SECOND_CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 1, 0.9),
     ]
     write_candidate_csv(train_path, rows)
     write_candidate_csv(eval_path, rows)
@@ -101,7 +112,9 @@ def test_linear_model_schema_is_validated() -> None:
 
 def test_rank_with_linear_model_rejects_invalid_k() -> None:
     with pytest.raises(ValueError, match="k must be positive"):
-        rank_with_linear_model({}, LinearRankerModel(LINEAR_FEATURE_NAMES, (0.0,) * 15), k=0)
+        rank_with_linear_model(
+            {}, LinearRankerModel(LINEAR_FEATURE_NAMES, (0.0,) * len(LINEAR_FEATURE_NAMES)), k=0
+        )
 
 
 def test_linear_ranker_config_rejects_invalid_values() -> None:
