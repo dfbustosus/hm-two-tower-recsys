@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 RAW_COMPETITION_DIR_NAME = "h-and-m-personalized-fashion-recommendations"
@@ -208,6 +209,11 @@ class ProjectPaths:
         lookback_days: int,
         co_visitation_history_items: int | None = None,
         co_visitation_neighbors_per_item: int | None = None,
+        content_similarity_source_name: str | None = None,
+        content_similarity_manifest_path: Path | str | None = None,
+        content_similarity_popularity_prior_weight: float | None = None,
+        content_similarity_popularity_lookback_days: int | None = None,
+        content_similarity_candidate_pool_size: int | None = None,
         max_target_customers: int | None = None,
     ) -> Path:
         """Return the default ranker-ready candidate CSV path.
@@ -218,6 +224,11 @@ class ProjectPaths:
             lookback_days: Recent popularity window length.
             co_visitation_history_items: Optional co-visitation history length.
             co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            content_similarity_source_name: Optional cached content source name.
+            content_similarity_manifest_path: Optional cached embedding manifest path.
+            content_similarity_popularity_prior_weight: Optional popularity-prior weight.
+            content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+            content_similarity_candidate_pool_size: Optional content reranking pool size.
             max_target_customers: Optional deterministic smoke-run customer cap.
 
         Returns:
@@ -229,9 +240,18 @@ class ProjectPaths:
             name = (
                 f"{name}_covis_h{co_visitation_history_items}_n{co_visitation_neighbors_per_item}"
             )
+        content_slug = _content_similarity_slug(
+            source_name=content_similarity_source_name,
+            manifest_path=content_similarity_manifest_path,
+            popularity_prior_weight=content_similarity_popularity_prior_weight,
+            popularity_lookback_days=content_similarity_popularity_lookback_days,
+            candidate_pool_size=content_similarity_candidate_pool_size,
+        )
+        if content_slug is not None:
+            name = f"{name}_{content_slug}"
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
-        return self.artifacts_dir / "candidate-exports" / f"{name}.csv"
+        return self.artifacts_dir / "candidate-exports" / _artifact_filename(name, "csv")
 
     def candidate_export_report_path(self, export_path: Path | str) -> Path:
         """Return the default JSON summary path for a candidate CSV export.
@@ -252,6 +272,14 @@ class ProjectPaths:
         k: int,
         candidate_k: int,
         max_target_customers: int | None = None,
+        lookback_days: int | None = None,
+        co_visitation_history_items: int | None = None,
+        co_visitation_neighbors_per_item: int | None = None,
+        content_similarity_source_name: str | None = None,
+        content_similarity_manifest_path: Path | str | None = None,
+        content_similarity_popularity_prior_weight: float | None = None,
+        content_similarity_popularity_lookback_days: int | None = None,
+        content_similarity_candidate_pool_size: int | None = None,
     ) -> Path:
         """Return the default deterministic ranker baseline report path.
 
@@ -260,6 +288,14 @@ class ProjectPaths:
             k: Recommendation depth for MAP evaluation.
             candidate_k: Maximum candidates per source used to build features.
             max_target_customers: Optional deterministic smoke-run customer cap.
+            lookback_days: Optional recent-popularity lookback length.
+            co_visitation_history_items: Optional co-visitation history length.
+            co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            content_similarity_source_name: Optional cached content source name.
+            content_similarity_manifest_path: Optional cached embedding manifest path.
+            content_similarity_popularity_prior_weight: Optional popularity-prior weight.
+            content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+            content_similarity_candidate_pool_size: Optional content reranking pool size.
 
         Returns:
             Path under ``artifacts/ranker-baselines/``.
@@ -269,9 +305,20 @@ class ProjectPaths:
             f"deterministic_ranker_cutoff_{_safe_name(cutoff)}_"
             f"candidate_k_{candidate_k}_rank_k_{k}"
         )
+        name = _append_source_config_slug(
+            name,
+            lookback_days=lookback_days,
+            co_visitation_history_items=co_visitation_history_items,
+            co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            content_similarity_source_name=content_similarity_source_name,
+            content_similarity_manifest_path=content_similarity_manifest_path,
+            content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
+            content_similarity_popularity_lookback_days=content_similarity_popularity_lookback_days,
+            content_similarity_candidate_pool_size=content_similarity_candidate_pool_size,
+        )
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
-        return self.artifacts_dir / "ranker-baselines" / f"{name}.json"
+        return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
 
     def learned_ranker_baseline_report_path(
         self,
@@ -281,6 +328,14 @@ class ProjectPaths:
         candidate_k: int,
         max_target_customers: int | None = None,
         config_slug: str | None = None,
+        lookback_days: int | None = None,
+        co_visitation_history_items: int | None = None,
+        co_visitation_neighbors_per_item: int | None = None,
+        content_similarity_source_name: str | None = None,
+        content_similarity_manifest_path: Path | str | None = None,
+        content_similarity_popularity_prior_weight: float | None = None,
+        content_similarity_popularity_lookback_days: int | None = None,
+        content_similarity_candidate_pool_size: int | None = None,
     ) -> Path:
         """Return the default learned linear ranker baseline report path.
 
@@ -291,6 +346,14 @@ class ProjectPaths:
             candidate_k: Maximum candidates per source used to build features.
             max_target_customers: Optional deterministic smoke-run customer cap.
             config_slug: Optional filesystem-safe training config descriptor.
+            lookback_days: Optional recent-popularity lookback length.
+            co_visitation_history_items: Optional co-visitation history length.
+            co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            content_similarity_source_name: Optional cached content source name.
+            content_similarity_manifest_path: Optional cached embedding manifest path.
+            content_similarity_popularity_prior_weight: Optional popularity-prior weight.
+            content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+            content_similarity_candidate_pool_size: Optional content reranking pool size.
 
         Returns:
             Path under ``artifacts/ranker-baselines/``.
@@ -300,11 +363,22 @@ class ProjectPaths:
             f"learned_linear_ranker_train_{_safe_name(train_cutoff)}_"
             f"eval_{_safe_name(evaluation_cutoff)}_candidate_k_{candidate_k}_rank_k_{k}"
         )
+        name = _append_source_config_slug(
+            name,
+            lookback_days=lookback_days,
+            co_visitation_history_items=co_visitation_history_items,
+            co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            content_similarity_source_name=content_similarity_source_name,
+            content_similarity_manifest_path=content_similarity_manifest_path,
+            content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
+            content_similarity_popularity_lookback_days=content_similarity_popularity_lookback_days,
+            content_similarity_candidate_pool_size=content_similarity_candidate_pool_size,
+        )
         if config_slug is not None:
             name = f"{name}_{_safe_name(config_slug)}"
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
-        return self.artifacts_dir / "ranker-baselines" / f"{name}.json"
+        return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
 
     def rolling_ranker_validation_report_path(
         self,
@@ -313,6 +387,14 @@ class ProjectPaths:
         candidate_k: int,
         max_target_customers: int | None = None,
         config_slug: str | None = None,
+        lookback_days: int | None = None,
+        co_visitation_history_items: int | None = None,
+        co_visitation_neighbors_per_item: int | None = None,
+        content_similarity_source_name: str | None = None,
+        content_similarity_manifest_path: Path | str | None = None,
+        content_similarity_popularity_prior_weight: float | None = None,
+        content_similarity_popularity_lookback_days: int | None = None,
+        content_similarity_candidate_pool_size: int | None = None,
     ) -> Path:
         """Return the default rolling ranker validation report path.
 
@@ -322,6 +404,14 @@ class ProjectPaths:
             candidate_k: Maximum candidates per source used to build features.
             max_target_customers: Optional deterministic smoke-run customer cap.
             config_slug: Optional filesystem-safe training config descriptor.
+            lookback_days: Optional recent-popularity lookback length.
+            co_visitation_history_items: Optional co-visitation history length.
+            co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            content_similarity_source_name: Optional cached content source name.
+            content_similarity_manifest_path: Optional cached embedding manifest path.
+            content_similarity_popularity_prior_weight: Optional popularity-prior weight.
+            content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+            content_similarity_candidate_pool_size: Optional content reranking pool size.
 
         Returns:
             Path under ``artifacts/ranker-baselines/``.
@@ -338,11 +428,22 @@ class ProjectPaths:
             f"rolling_linear_ranker_eval_{first_cutoff}_to_{last_cutoff}_"
             f"windows_{len(cutoffs)}_candidate_k_{candidate_k}_rank_k_{k}"
         )
+        name = _append_source_config_slug(
+            name,
+            lookback_days=lookback_days,
+            co_visitation_history_items=co_visitation_history_items,
+            co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            content_similarity_source_name=content_similarity_source_name,
+            content_similarity_manifest_path=content_similarity_manifest_path,
+            content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
+            content_similarity_popularity_lookback_days=content_similarity_popularity_lookback_days,
+            content_similarity_candidate_pool_size=content_similarity_candidate_pool_size,
+        )
         if config_slug is not None:
             name = f"{name}_{_safe_name(config_slug)}"
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
-        return self.artifacts_dir / "ranker-baselines" / f"{name}.json"
+        return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
 
     def learned_ranker_submission_path(
         self,
@@ -352,6 +453,11 @@ class ProjectPaths:
         co_visitation_history_items: int | None = None,
         co_visitation_neighbors_per_item: int | None = None,
         config_slug: str | None = None,
+        content_similarity_source_name: str | None = None,
+        content_similarity_manifest_path: Path | str | None = None,
+        content_similarity_popularity_prior_weight: float | None = None,
+        content_similarity_popularity_lookback_days: int | None = None,
+        content_similarity_candidate_pool_size: int | None = None,
     ) -> Path:
         """Return the default learned linear ranker submission CSV path.
 
@@ -362,6 +468,11 @@ class ProjectPaths:
             co_visitation_history_items: Optional co-visitation history length.
             co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
             config_slug: Optional filesystem-safe training config descriptor.
+            content_similarity_source_name: Optional cached content source name.
+            content_similarity_manifest_path: Optional cached embedding manifest path.
+            content_similarity_popularity_prior_weight: Optional popularity-prior weight.
+            content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+            content_similarity_candidate_pool_size: Optional content reranking pool size.
 
         Returns:
             Path under ``submissions/``.
@@ -376,9 +487,18 @@ class ProjectPaths:
                 f"{name}_covis_h{co_visitation_history_items}_"
                 f"n{co_visitation_neighbors_per_item}"
             )
+        content_slug = _content_similarity_slug(
+            source_name=content_similarity_source_name,
+            manifest_path=content_similarity_manifest_path,
+            popularity_prior_weight=content_similarity_popularity_prior_weight,
+            popularity_lookback_days=content_similarity_popularity_lookback_days,
+            candidate_pool_size=content_similarity_candidate_pool_size,
+        )
+        if content_slug is not None:
+            name = f"{name}_{content_slug}"
         if config_slug is not None:
             name = f"{name}_{_safe_name(config_slug)}"
-        return self.submissions_dir / f"{name}.csv"
+        return self.submissions_dir / _artifact_filename(name, "csv")
 
     def learned_ranker_submission_report_path(self, submission_path: Path | str) -> Path:
         """Return the default JSON report path for a learned-ranker submission.
@@ -492,6 +612,23 @@ class ProjectPaths:
         content_dir = self.artifacts_dir / "multimodal" / "article-content"
         return content_dir / "article_content.csv"
 
+    def article_content_export_path_for_config(
+        self,
+        max_articles: int | None = None,
+        priority_cutoff: str | None = None,
+        priority_lookback_days: int | None = None,
+    ) -> Path:
+        """Return an article-content CSV path for a bounded/prioritized export."""
+
+        name = "article_content"
+        if priority_cutoff is not None:
+            name = f"{name}_priority_cutoff_{_safe_name(priority_cutoff)}"
+        if priority_lookback_days is not None:
+            name = f"{name}_lookback_{priority_lookback_days}"
+        if max_articles is not None:
+            name = f"{name}_first_{max_articles}_articles"
+        return self.artifacts_dir / "multimodal" / "article-content" / f"{name}.csv"
+
     @property
     def article_content_export_report_path(self) -> Path:
         """Return the default article content export JSON report path.
@@ -502,6 +639,12 @@ class ProjectPaths:
 
         content_dir = self.artifacts_dir / "multimodal" / "article-content"
         return content_dir / "article_content.json"
+
+    def article_content_export_report_path_for_path(self, export_path: Path | str) -> Path:
+        """Return the JSON report path matching an article-content CSV path."""
+
+        stem = Path(export_path).stem or "article_content"
+        return self.artifacts_dir / "multimodal" / "article-content" / f"{_safe_name(stem)}.json"
 
     def article_embedding_cache_dir(self, provider_slug: str) -> Path:
         """Return the default article embedding cache directory for a provider.
@@ -577,6 +720,10 @@ class ProjectPaths:
         self,
         cutoff: str,
         source_name: str,
+        manifest_path: Path | str | None = None,
+        popularity_prior_weight: float | None = None,
+        popularity_lookback_days: int | None = None,
+        candidate_pool_size: int | None = None,
         max_target_customers: int | None = None,
     ) -> Path:
         """Return the default cached content-similarity diagnostics report path."""
@@ -586,12 +733,127 @@ class ProjectPaths:
         if not source_name:
             raise ValueError("source_name must not be empty")
         name = f"content_similarity_{_safe_name(source_name)}_cutoff_{_safe_name(cutoff)}"
+        if manifest_path is not None:
+            name = f"{name}_{_content_manifest_slug(manifest_path)}"
+        name = _append_content_prior_slug(
+            name,
+            popularity_prior_weight=popularity_prior_weight,
+            popularity_lookback_days=popularity_lookback_days,
+            candidate_pool_size=candidate_pool_size,
+        )
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
-        return self.artifacts_dir / "multimodal" / "content-similarity" / f"{name}.json"
+        return (
+            self.artifacts_dir
+            / "multimodal"
+            / "content-similarity"
+            / _artifact_filename(name, "json")
+        )
 
 
 def _safe_name(value: str) -> str:
     """Return a filesystem-safe name derived from an arbitrary string."""
 
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+
+
+def _append_source_config_slug(
+    name: str,
+    lookback_days: int | None = None,
+    co_visitation_history_items: int | None = None,
+    co_visitation_neighbors_per_item: int | None = None,
+    content_similarity_source_name: str | None = None,
+    content_similarity_manifest_path: Path | str | None = None,
+    content_similarity_popularity_prior_weight: float | None = None,
+    content_similarity_popularity_lookback_days: int | None = None,
+    content_similarity_candidate_pool_size: int | None = None,
+) -> str:
+    """Append candidate-source configuration tokens to an artifact stem."""
+
+    if lookback_days is not None:
+        name = f"{name}_lookback_{lookback_days}"
+    if co_visitation_history_items is not None and co_visitation_neighbors_per_item is not None:
+        name = f"{name}_covis_h{co_visitation_history_items}_n{co_visitation_neighbors_per_item}"
+    content_slug = _content_similarity_slug(
+        source_name=content_similarity_source_name,
+        manifest_path=content_similarity_manifest_path,
+        popularity_prior_weight=content_similarity_popularity_prior_weight,
+        popularity_lookback_days=content_similarity_popularity_lookback_days,
+        candidate_pool_size=content_similarity_candidate_pool_size,
+    )
+    if content_slug is not None:
+        name = f"{name}_{content_slug}"
+    return name
+
+
+def _content_similarity_slug(
+    source_name: str | None,
+    manifest_path: Path | str | None,
+    popularity_prior_weight: float | None = None,
+    popularity_lookback_days: int | None = None,
+    candidate_pool_size: int | None = None,
+) -> str | None:
+    """Return a path-safe token for a cached content-similarity source."""
+
+    if source_name is None and manifest_path is None:
+        return None
+    parts = ["content"]
+    if source_name:
+        parts.append(_safe_name(source_name))
+    if manifest_path is not None:
+        parts.append(_content_manifest_slug(manifest_path))
+    slug = "_".join(parts)
+    return _append_content_prior_slug(
+        slug,
+        popularity_prior_weight=popularity_prior_weight,
+        popularity_lookback_days=popularity_lookback_days,
+        candidate_pool_size=candidate_pool_size,
+    )
+
+
+def _append_content_prior_slug(
+    name: str,
+    popularity_prior_weight: float | None = None,
+    popularity_lookback_days: int | None = None,
+    candidate_pool_size: int | None = None,
+) -> str:
+    """Append compact content-prior config tokens to a path stem."""
+
+    if popularity_prior_weight is not None and popularity_prior_weight > 0.0:
+        name = f"{name}_popw{_float_path_token(popularity_prior_weight)}"
+    if popularity_lookback_days is not None:
+        name = f"{name}_poplookback{popularity_lookback_days}"
+    if candidate_pool_size is not None:
+        name = f"{name}_pool{candidate_pool_size}"
+    return name
+
+
+def _content_manifest_slug(manifest_path: Path | str) -> str:
+    """Return a compact, stable slug for an embedding-cache manifest path."""
+
+    manifest = Path(manifest_path)
+    label_source = manifest.parent.name or manifest.stem or "manifest"
+    digest = sha256(str(manifest).encode("utf-8")).hexdigest()[:8]
+    return f"{_compact_safe_name(label_source, max_length=24)}_{digest}"
+
+
+def _compact_safe_name(value: str, max_length: int = 48) -> str:
+    """Return a safe slug, shortened with a stable digest when needed."""
+
+    safe_value = _safe_name(value)
+    if len(safe_value) <= max_length:
+        return safe_value
+    digest = sha256(safe_value.encode("utf-8")).hexdigest()[:8]
+    return f"{safe_value[:max_length]}_{digest}"
+
+
+def _artifact_filename(stem: str, extension: str, max_stem_length: int = 180) -> str:
+    """Return a filename short enough for common local filesystems."""
+
+    return f"{_compact_safe_name(stem, max_length=max_stem_length)}.{extension}"
+
+
+def _float_path_token(value: float) -> str:
+    """Return a compact filesystem-safe token for a float."""
+
+    return f"{value:g}".replace("-", "m").replace(".", "p")
