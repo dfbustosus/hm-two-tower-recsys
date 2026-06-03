@@ -61,6 +61,18 @@ Source names
 .. automodule:: hm_recsys.retrieval.source_names
    :members:
 
+Content similarity retrieval
+----------------------------
+
+.. automodule:: hm_recsys.retrieval.content_similarity
+   :members:
+
+Content similarity diagnostics
+------------------------------
+
+.. automodule:: hm_recsys.retrieval.content_similarity_diagnostics
+   :members:
+
 Co-visitation retrieval
 -----------------------
 
@@ -109,6 +121,24 @@ Embedding cache manifests
 .. automodule:: hm_recsys.embeddings.cache_manifest
    :members:
 
+Embedding cache loading
+-----------------------
+
+.. automodule:: hm_recsys.embeddings.cache_io
+   :members:
+
+Embedding cache generation
+--------------------------
+
+.. automodule:: hm_recsys.embeddings.generation
+   :members:
+
+Optional HuggingFace CLIP provider
+----------------------------------
+
+.. automodule:: hm_recsys.embeddings.providers.huggingface_clip
+   :members:
+
 Article image inventory
 -----------------------
 
@@ -119,6 +149,12 @@ Indexing contracts
 ------------------
 
 .. automodule:: hm_recsys.indexing.contracts
+   :members:
+
+Exact vector indexing
+---------------------
+
+.. automodule:: hm_recsys.indexing.exact
    :members:
 
 Training contracts
