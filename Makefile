@@ -40,7 +40,7 @@ TWO_TOWER_MAX_POSITIVE_EXAMPLES ?= 100000
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline learned-ranker-baseline rolling-ranker-validation learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline learned-ranker-baseline rolling-ranker-validation learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -60,6 +60,7 @@ help:
 	@printf "Data:\n"
 	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
 	@printf "  make image-inventory  Map articles to local images and write ignored reports\n\n"
+	@printf "  make article-content-export  Export article text/image paths for encoders\n\n"
 	@printf "Validation/submission:\n"
 	@printf "  make temporal-split CUTOFF=YYYY-MM-DD  Summarize a temporal split\n"
 	@printf "  make validate-submission SUBMISSION=path/to.csv  Validate a submission CSV\n"
@@ -146,6 +147,9 @@ data-contract: venv
 
 image-inventory: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli inventory-article-images
+
+article-content-export: venv
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-article-content
 
 temporal-split: venv
 	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make temporal-split CUTOFF=2020-09-16\n"; exit 2; fi
