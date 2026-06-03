@@ -85,6 +85,12 @@ Rolling ranker validation
 .. automodule:: hm_recsys.ranking.rolling
    :members:
 
+Learned ranker submissions
+--------------------------
+
+.. automodule:: hm_recsys.ranking.submission
+   :members:
+
 Embedding contracts
 -------------------
 
