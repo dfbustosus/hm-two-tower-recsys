@@ -63,10 +63,11 @@ AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS ?=
 INCLUDE_GARMENT_GROUP_POPULARITY ?=
 GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS ?=
 GARMENT_GROUP_MAX_HISTORY_ITEMS ?= 8
+DETERMINISTIC_TUNING_TOP_TRIALS ?= 10
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline learned-ranker-baseline rolling-ranker-validation learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -99,8 +100,10 @@ help:
 	@printf "  make candidate-diagnostics CUTOFF=YYYY-MM-DD  Evaluate candidate sources\n\n"
 	@printf "  make candidate-export CUTOFF=YYYY-MM-DD  Export ranker-ready candidates\n\n"
 	@printf "  make ranker-baseline CUTOFF=YYYY-MM-DD  Evaluate deterministic ranker\n\n"
+	@printf "  make deterministic-ranker-tuning CUTOFF=YYYY-MM-DD  Tune deterministic weights\n\n"
 	@printf "  make learned-ranker-baseline CUTOFF=YYYY-MM-DD  Train/evaluate linear ranker\n\n"
 	@printf "  make rolling-ranker-validation  Validate rankers across rolling windows\n\n"
+	@printf "  make deterministic-ranker-submission  Generate tuned deterministic CSV\n\n"
 	@printf "  make learned-ranker-submission  Generate validated learned-ranker CSV\n\n"
 	@printf "  make two-tower-example-export CUTOFF=YYYY-MM-DD  Export two-tower examples\n\n"
 	@printf "Maintenance:\n"
@@ -281,6 +284,26 @@ ranker-baseline: venv
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" $$extra_args
 
+deterministic-ranker-tuning: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make deterministic-ranker-tuning CUTOFF=2020-09-16\n"; exit 2; fi
+	@extra_args=""; \
+	if [[ -n "$(RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_AGE_SEGMENT_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-age-segment-popularity --age-segment-bucket-size $(AGE_SEGMENT_BUCKET_SIZE)"; \
+	fi; \
+	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_GARMENT_GROUP_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-garment-group-popularity --garment-group-max-history-items $(GARMENT_GROUP_MAX_HISTORY_ITEMS)"; \
+	fi; \
+	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli tune-deterministic-ranker --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" --top-trials "$(DETERMINISTIC_TUNING_TOP_TRIALS)" $$extra_args
+
 learned-ranker-baseline: venv
 	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make learned-ranker-baseline CUTOFF=2020-09-16\n"; exit 2; fi
 	@extra_args=""; \
@@ -334,6 +357,25 @@ rolling-ranker-validation: venv
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli rolling-ranker-validation --cutoffs $(ROLLING_RANKER_CUTOFFS) --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(ROLLING_RANKER_CANDIDATE_K)" --k "$(ROLLING_RANKER_K)" --epochs "$(ROLLING_RANKER_EPOCHS)" --learning-rate "$(ROLLING_RANKER_LEARNING_RATE)" --l2 "$(ROLLING_RANKER_L2)" $$extra_args
+
+deterministic-ranker-submission: venv
+	@extra_args=""; \
+	if [[ -n "$(RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_AGE_SEGMENT_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-age-segment-popularity --age-segment-bucket-size $(AGE_SEGMENT_BUCKET_SIZE)"; \
+	fi; \
+	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_GARMENT_GROUP_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-garment-group-popularity --garment-group-max-history-items $(GARMENT_GROUP_MAX_HISTORY_ITEMS)"; \
+	fi; \
+	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli generate-deterministic-ranker-submission --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" --top-trials "$(DETERMINISTIC_TUNING_TOP_TRIALS)" $$extra_args
 
 learned-ranker-submission: venv
 	@extra_args=""; \
