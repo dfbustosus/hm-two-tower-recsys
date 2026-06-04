@@ -49,6 +49,8 @@ def test_feature_vector_matches_schema() -> None:
         repeat_score=0.5,
         age_segment_popularity_rank=3,
         age_segment_popularity_score=0.7,
+        garment_group_popularity_rank=4,
+        garment_group_popularity_score=0.6,
         content_similarity_rank=1,
         content_similarity_score=0.8,
         source_count=1,
@@ -63,6 +65,10 @@ def test_feature_vector_matches_schema() -> None:
     assert vector[3] == pytest.approx(0.5)
     assert vector[LINEAR_FEATURE_NAMES.index("has_age_segment_popularity")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("age_segment_popularity_score")] == pytest.approx(0.7)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_garment_group_popularity")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("garment_group_popularity_score")] == pytest.approx(
+        0.6
+    )
     assert vector[LINEAR_FEATURE_NAMES.index("has_content_similarity")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("content_similarity_score")] == pytest.approx(0.8)
 
