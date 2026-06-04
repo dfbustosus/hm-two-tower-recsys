@@ -195,6 +195,8 @@ The research outcome is disciplined experimentation: every modeling claim is tie
 - Expose the first transparent deterministic ranker through `make ranker-baseline CUTOFF=YYYY-MM-DD`; write reports under ignored `artifacts/ranker-baselines/`.
 - Expose the first leakage-safe learned linear ranker through `make learned-ranker-baseline CUTOFF=YYYY-MM-DD`; train on a previous non-overlapping target window and write reports under ignored `artifacts/ranker-baselines/`.
 - Expose rolling-window ranker promotion checks through `make rolling-ranker-validation`; train each learned ranker on the previous non-overlapping label window and write aggregate reports under ignored `artifacts/ranker-baselines/`.
+- Expose leakage-safe deterministic ranker weight tuning through `make deterministic-ranker-tuning`; select weights on the previous non-overlapping label window, evaluate them on the requested cutoff, and write selected weights/grid reports under ignored `artifacts/ranker-baselines/`.
+- Expose tuned deterministic-ranker submission generation through `make deterministic-ranker-submission`; select deterministic weights on the latest available 7-day label window, generate predictions for the full `sample_submission.csv` universe, validate the CSV, and write reports under ignored `artifacts/ranker-submissions/`.
 - Expose promoted learned-ranker submission generation through `make learned-ranker-submission`; train on the latest available non-overlapping label window, generate predictions for the full `sample_submission.csv` universe, validate the CSV, and write reports under ignored `artifacts/ranker-submissions/`.
 
 ### Stage 8: Two-tower and advanced challengers
