@@ -896,15 +896,15 @@ def _content_similarity_slug(
     parts = ["content"]
     if source_name:
         parts.append(_safe_name(source_name))
-    if manifest_path is not None:
-        parts.append(_content_manifest_slug(manifest_path))
-    slug = "_".join(parts)
-    return _append_content_prior_slug(
-        slug,
+    slug = _append_content_prior_slug(
+        "_".join(parts),
         popularity_prior_weight=popularity_prior_weight,
         popularity_lookback_days=popularity_lookback_days,
         candidate_pool_size=candidate_pool_size,
     )
+    if manifest_path is not None:
+        slug = f"{slug}_{_content_manifest_slug(manifest_path)}"
+    return slug
 
 
 def _append_age_segment_slug(
