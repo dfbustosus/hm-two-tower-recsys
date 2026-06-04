@@ -397,6 +397,41 @@ Garment-group and age-segment sources can be combined for bounded ablations, but
 promotion still requires same-split and rolling MAP@12 gains over the existing
 candidate blend/ranker baselines.
 
+Tune deterministic ranker weights leakage-safely by selecting weights on the
+previous non-overlapping label window and evaluating them on the requested
+cutoff. This is the current preferred promotion path when deterministic ranking
+beats the learned linear ranker in rolling validation:
+
+```bash
+make deterministic-ranker-tuning \
+  CUTOFF=2020-09-16 \
+  RANKER_CANDIDATE_K=100 \
+  RANKER_MAX_TARGET_CUSTOMERS=10000 \
+  INCLUDE_AGE_SEGMENT_POPULARITY=1 \
+  INCLUDE_GARMENT_GROUP_POPULARITY=1
+```
+
+The tuning grid and selected weights are written to an ignored JSON report under
+`artifacts/ranker-baselines/`. Treat the selected weights as a challenger until
+they improve rolling validation, not just one latest-week split.
+
+Generate and validate a full tuned deterministic-ranker submission after rolling
+validation supports the source/weight configuration:
+
+```bash
+make deterministic-ranker-submission \
+  RANKER_CANDIDATE_K=100 \
+  RANKER_MAX_TARGET_CUSTOMERS=10000 \
+  INCLUDE_AGE_SEGMENT_POPULARITY=1 \
+  INCLUDE_GARMENT_GROUP_POPULARITY=1
+```
+
+This selects deterministic weights on the latest visible 7-day label window
+using the optional deterministic customer cap, then uses all official training
+transactions for final candidate features, backfills every row to 12 valid
+non-duplicate articles, validates the CSV, and writes a reproducibility report
+under `artifacts/ranker-submissions/`.
+
 Train a leakage-safe learned linear ranker on the previous 7-day window and
 evaluate it on the requested validation cutoff:
 
