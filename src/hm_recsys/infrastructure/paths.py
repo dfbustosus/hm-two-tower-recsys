@@ -440,6 +440,80 @@ class ProjectPaths:
             name = f"{name}_first_{max_target_customers}_customers"
         return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
 
+    def deterministic_ranker_tuning_report_path(
+        self,
+        train_cutoff: str,
+        evaluation_cutoff: str,
+        k: int,
+        candidate_k: int,
+        max_target_customers: int | None = None,
+        lookback_days: int | None = None,
+        co_visitation_history_items: int | None = None,
+        co_visitation_neighbors_per_item: int | None = None,
+        include_age_segment_popularity: bool = False,
+        age_segment_bucket_size: int | None = None,
+        age_segment_popularity_lookback_days: int | None = None,
+        include_garment_group_popularity: bool = False,
+        garment_group_popularity_lookback_days: int | None = None,
+        garment_group_max_history_items: int | None = None,
+        content_similarity_source_name: str | None = None,
+        content_similarity_manifest_path: Path | str | None = None,
+        content_similarity_popularity_prior_weight: float | None = None,
+        content_similarity_popularity_lookback_days: int | None = None,
+        content_similarity_candidate_pool_size: int | None = None,
+    ) -> Path:
+        """Return the default deterministic-ranker tuning report path.
+
+        Args:
+            train_cutoff: Tuning-label cutoff date string.
+            evaluation_cutoff: Evaluation-label cutoff date string.
+            k: Recommendation depth for MAP evaluation.
+            candidate_k: Maximum candidates per source used to build features.
+            max_target_customers: Optional deterministic smoke-run customer cap.
+            lookback_days: Optional recent-popularity lookback length.
+            co_visitation_history_items: Optional co-visitation history length.
+            co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            include_age_segment_popularity: Whether age-segment popularity is included.
+            age_segment_bucket_size: Optional age-bucket width.
+            age_segment_popularity_lookback_days: Optional segment-popularity lookback.
+            include_garment_group_popularity: Whether garment-group affinity rows are included.
+            garment_group_popularity_lookback_days: Optional garment-group popularity lookback.
+            garment_group_max_history_items: Optional history length used for garment affinities.
+            content_similarity_source_name: Optional cached content source name.
+            content_similarity_manifest_path: Optional cached embedding manifest path.
+            content_similarity_popularity_prior_weight: Optional popularity-prior weight.
+            content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
+            content_similarity_candidate_pool_size: Optional content reranking pool size.
+
+        Returns:
+            Path under ``artifacts/ranker-baselines/``.
+        """
+
+        name = (
+            f"deterministic_ranker_tuning_train_{_safe_name(train_cutoff)}_"
+            f"eval_{_safe_name(evaluation_cutoff)}_candidate_k_{candidate_k}_rank_k_{k}"
+        )
+        name = _append_source_config_slug(
+            name,
+            lookback_days=lookback_days,
+            co_visitation_history_items=co_visitation_history_items,
+            co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            include_age_segment_popularity=include_age_segment_popularity,
+            age_segment_bucket_size=age_segment_bucket_size,
+            age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+            include_garment_group_popularity=include_garment_group_popularity,
+            garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+            garment_group_max_history_items=garment_group_max_history_items,
+            content_similarity_source_name=content_similarity_source_name,
+            content_similarity_manifest_path=content_similarity_manifest_path,
+            content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
+            content_similarity_popularity_lookback_days=content_similarity_popularity_lookback_days,
+            content_similarity_candidate_pool_size=content_similarity_candidate_pool_size,
+        )
+        if max_target_customers is not None:
+            name = f"{name}_first_{max_target_customers}_customers"
+        return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
+
     def rolling_ranker_validation_report_path(
         self,
         cutoffs: Sequence[str],
@@ -578,6 +652,48 @@ class ProjectPaths:
             name = f"{name}_{_safe_name(config_slug)}"
         return self.submissions_dir / _artifact_filename(name, "csv")
 
+    def deterministic_ranker_submission_path(
+        self,
+        k: int,
+        candidate_k: int,
+        lookback_days: int,
+        co_visitation_history_items: int | None = None,
+        co_visitation_neighbors_per_item: int | None = None,
+        include_age_segment_popularity: bool = False,
+        age_segment_bucket_size: int | None = None,
+        age_segment_popularity_lookback_days: int | None = None,
+        include_garment_group_popularity: bool = False,
+        garment_group_popularity_lookback_days: int | None = None,
+        garment_group_max_history_items: int | None = None,
+        tuning_slug: str | None = None,
+    ) -> Path:
+        """Return the default tuned deterministic-ranker submission CSV path."""
+
+        name = (
+            f"deterministic_ranker_tuned_lookback_{lookback_days}_"
+            f"candidate_k_{candidate_k}_rank_k_{k}"
+        )
+        if co_visitation_history_items is not None and co_visitation_neighbors_per_item is not None:
+            name = (
+                f"{name}_covis_h{co_visitation_history_items}_"
+                f"n{co_visitation_neighbors_per_item}"
+            )
+        name = _append_age_segment_slug(
+            name,
+            include_age_segment_popularity=include_age_segment_popularity,
+            age_segment_bucket_size=age_segment_bucket_size,
+            age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+        )
+        name = _append_garment_group_slug(
+            name,
+            include_garment_group_popularity=include_garment_group_popularity,
+            garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+            garment_group_max_history_items=garment_group_max_history_items,
+        )
+        if tuning_slug is not None:
+            name = f"{name}_{_safe_name(tuning_slug)}"
+        return self.submissions_dir / _artifact_filename(name, "csv")
+
     def learned_ranker_submission_report_path(self, submission_path: Path | str) -> Path:
         """Return the default JSON report path for a learned-ranker submission.
 
@@ -589,6 +705,12 @@ class ProjectPaths:
         """
 
         stem = Path(submission_path).stem or "learned_ranker_submission"
+        return self.artifacts_dir / "ranker-submissions" / f"{_safe_name(stem)}.json"
+
+    def deterministic_ranker_submission_report_path(self, submission_path: Path | str) -> Path:
+        """Return the default JSON report path for deterministic-ranker submission."""
+
+        stem = Path(submission_path).stem or "deterministic_ranker_submission"
         return self.artifacts_dir / "ranker-submissions" / f"{_safe_name(stem)}.json"
 
     def two_tower_examples_path(
