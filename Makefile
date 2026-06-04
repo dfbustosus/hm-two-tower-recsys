@@ -60,6 +60,9 @@ LEARNED_RANKER_CONTENT_SIMILARITY_SOURCE ?= multimodal_similarity
 INCLUDE_AGE_SEGMENT_POPULARITY ?=
 AGE_SEGMENT_BUCKET_SIZE ?= 10
 AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS ?=
+INCLUDE_GARMENT_GROUP_POPULARITY ?=
+GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS ?=
+GARMENT_GROUP_MAX_HISTORY_ITEMS ?= 8
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
@@ -250,6 +253,12 @@ candidate-export: venv
 	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_GARMENT_GROUP_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-garment-group-popularity --garment-group-max-history-items $(GARMENT_GROUP_MAX_HISTORY_ITEMS)"; \
+	fi; \
+	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli export-candidates --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(CANDIDATE_K)" $$extra_args
 
 ranker-baseline: venv
@@ -264,6 +273,12 @@ ranker-baseline: venv
 	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_GARMENT_GROUP_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-garment-group-popularity --garment-group-max-history-items $(GARMENT_GROUP_MAX_HISTORY_ITEMS)"; \
+	fi; \
+	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" $$extra_args
 
 learned-ranker-baseline: venv
@@ -277,6 +292,12 @@ learned-ranker-baseline: venv
 	fi; \
 	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_GARMENT_GROUP_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-garment-group-popularity --garment-group-max-history-items $(GARMENT_GROUP_MAX_HISTORY_ITEMS)"; \
+	fi; \
+	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	if [[ -n "$(LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST)" ]]; then \
 		extra_args="$$extra_args --content-similarity-manifest-path $(LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST) --content-similarity-source-name $(LEARNED_RANKER_CONTENT_SIMILARITY_SOURCE)"; \
@@ -299,6 +320,18 @@ rolling-ranker-validation: venv
 	fi; \
 	if [[ -n "$(ROLLING_RANKER_NO_CO_VISITATION)" ]]; then \
 		extra_args="$$extra_args --no-co-visitation"; \
+	fi; \
+	if [[ -n "$(INCLUDE_AGE_SEGMENT_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-age-segment-popularity --age-segment-bucket-size $(AGE_SEGMENT_BUCKET_SIZE)"; \
+	fi; \
+	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_GARMENT_GROUP_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-garment-group-popularity --garment-group-max-history-items $(GARMENT_GROUP_MAX_HISTORY_ITEMS)"; \
+	fi; \
+	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli rolling-ranker-validation --cutoffs $(ROLLING_RANKER_CUTOFFS) --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(ROLLING_RANKER_CANDIDATE_K)" --k "$(ROLLING_RANKER_K)" --epochs "$(ROLLING_RANKER_EPOCHS)" --learning-rate "$(ROLLING_RANKER_LEARNING_RATE)" --l2 "$(ROLLING_RANKER_L2)" $$extra_args
 
