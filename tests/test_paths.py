@@ -110,6 +110,35 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         content_similarity_source_name="multimodal_similarity",
         content_similarity_manifest_path=manifest_path,
     )
+    tuning_report_path = paths.deterministic_ranker_tuning_report_path(
+        train_cutoff="2020-09-09",
+        evaluation_cutoff="2020-09-16",
+        k=12,
+        candidate_k=100,
+        max_target_customers=1000,
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        include_age_segment_popularity=True,
+        age_segment_bucket_size=10,
+        age_segment_popularity_lookback_days=7,
+        include_garment_group_popularity=True,
+        garment_group_popularity_lookback_days=7,
+        garment_group_max_history_items=8,
+    )
+    deterministic_submission_path = paths.deterministic_ranker_submission_path(
+        k=12,
+        candidate_k=100,
+        lookback_days=7,
+        co_visitation_history_items=8,
+        co_visitation_neighbors_per_item=100,
+        include_age_segment_popularity=True,
+        age_segment_bucket_size=10,
+        age_segment_popularity_lookback_days=7,
+        include_garment_group_popularity=True,
+        garment_group_popularity_lookback_days=7,
+        garment_group_max_history_items=8,
+    )
 
     assert "content_multimodal_similarity" in candidate_path.stem
     assert "content_multimodal_similarity" in ranker_report_path.stem
@@ -117,6 +146,12 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
     assert "hf-clip_fashion-clip" in candidate_path.stem
     assert "lookback_7" in ranker_report_path.stem
     assert "covis_h8_n100" in learned_report_path.stem
+    assert "deterministic_ranker_tuning_train_2020-09-09" in tuning_report_path.stem
+    assert "age_segment_b10_lookback7" in tuning_report_path.stem
+    assert "garment_group_lookback7_h8" in tuning_report_path.stem
+    assert "deterministic_ranker_tuned" in deterministic_submission_path.stem
+    assert "age_segment_b10_lookback7" in deterministic_submission_path.stem
+    assert "garment_group_lookback7_h8" in deterministic_submission_path.stem
 
     prior_candidate_path = paths.candidate_export_path(
         cutoff="2020-09-16",
