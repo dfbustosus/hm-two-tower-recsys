@@ -20,6 +20,7 @@ from hm_recsys.retrieval.source_names import (
     AGE_SEGMENT_POPULARITY_SOURCE,
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    GARMENT_GROUP_POPULARITY_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
@@ -163,6 +164,45 @@ def test_validation_candidate_export_can_include_age_segment_popularity(
     assert {row["article_id"] for row in segment_rows} == {ARTICLE_1, segment_article}
 
 
+def test_validation_candidate_export_can_include_garment_group_popularity(
+    tmp_path: Path,
+) -> None:
+    split = TemporalSplit.from_isoformat("2020-01-08")
+    garment_article = "0000000006"
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 2), SECOND_CUSTOMER_ID, garment_article),
+        TransactionEvent(date(2020, 1, 8), CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
+    ]
+    output_path = tmp_path / "garment_candidates.csv"
+
+    summary = write_validation_candidate_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=split,
+        submission_customer_ids=(CUSTOMER_ID,),
+        output_path=output_path,
+        k=2,
+        include_co_visitation=False,
+        include_garment_group_popularity=True,
+        article_garment_group_by_id={
+            ARTICLE_1: "Tops",
+            garment_article: "Tops",
+            VALIDATION_ONLY_ARTICLE: "Tops",
+        },
+        garment_group_popularity_lookback_days=7,
+        garment_group_max_history_items=2,
+    )
+
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8", newline="")))
+    garment_rows = [row for row in rows if row["source"] == GARMENT_GROUP_POPULARITY_SOURCE]
+    assert summary.include_garment_group_popularity is True
+    assert summary.garment_group_popularity_lookback_days == 7
+    assert summary.garment_group_max_history_items == 2
+    assert summary.source_row_counts[GARMENT_GROUP_POPULARITY_SOURCE] == 2
+    assert {row["article_id"] for row in garment_rows} == {ARTICLE_1, garment_article}
+    assert VALIDATION_ONLY_ARTICLE not in {row["article_id"] for row in garment_rows}
+
+
 def test_candidate_export_supports_deterministic_smoke_cap(tmp_path: Path) -> None:
     split = TemporalSplit.from_isoformat("2020-01-08")
     events = [
@@ -209,6 +249,14 @@ def test_candidate_export_rejects_invalid_limits(tmp_path: Path) -> None:
             submission_customer_ids=(),
             output_path=tmp_path / "invalid_segment.csv",
             include_age_segment_popularity=True,
+        )
+    with pytest.raises(ValueError, match="article_garment_group_by_id"):
+        write_validation_candidate_export(
+            transaction_iter_factory=lambda: iter(()),
+            split=split,
+            submission_customer_ids=(),
+            output_path=tmp_path / "invalid_garment.csv",
+            include_garment_group_popularity=True,
         )
 
 
