@@ -209,6 +209,12 @@ class ProjectPaths:
         lookback_days: int,
         co_visitation_history_items: int | None = None,
         co_visitation_neighbors_per_item: int | None = None,
+        include_age_segment_popularity: bool = False,
+        age_segment_bucket_size: int | None = None,
+        age_segment_popularity_lookback_days: int | None = None,
+        include_garment_group_popularity: bool = False,
+        garment_group_popularity_lookback_days: int | None = None,
+        garment_group_max_history_items: int | None = None,
         content_similarity_source_name: str | None = None,
         content_similarity_manifest_path: Path | str | None = None,
         content_similarity_popularity_prior_weight: float | None = None,
@@ -224,6 +230,12 @@ class ProjectPaths:
             lookback_days: Recent popularity window length.
             co_visitation_history_items: Optional co-visitation history length.
             co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            include_age_segment_popularity: Whether age-segment popularity is included.
+            age_segment_bucket_size: Optional age-bucket width.
+            age_segment_popularity_lookback_days: Optional segment-popularity lookback.
+            include_garment_group_popularity: Whether garment-group affinity rows are included.
+            garment_group_popularity_lookback_days: Optional garment-group popularity lookback.
+            garment_group_max_history_items: Optional history length used for garment affinities.
             content_similarity_source_name: Optional cached content source name.
             content_similarity_manifest_path: Optional cached embedding manifest path.
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
@@ -240,6 +252,18 @@ class ProjectPaths:
             name = (
                 f"{name}_covis_h{co_visitation_history_items}_n{co_visitation_neighbors_per_item}"
             )
+        name = _append_age_segment_slug(
+            name,
+            include_age_segment_popularity=include_age_segment_popularity,
+            age_segment_bucket_size=age_segment_bucket_size,
+            age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+        )
+        name = _append_garment_group_slug(
+            name,
+            include_garment_group_popularity=include_garment_group_popularity,
+            garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+            garment_group_max_history_items=garment_group_max_history_items,
+        )
         content_slug = _content_similarity_slug(
             source_name=content_similarity_source_name,
             manifest_path=content_similarity_manifest_path,
@@ -275,6 +299,12 @@ class ProjectPaths:
         lookback_days: int | None = None,
         co_visitation_history_items: int | None = None,
         co_visitation_neighbors_per_item: int | None = None,
+        include_age_segment_popularity: bool = False,
+        age_segment_bucket_size: int | None = None,
+        age_segment_popularity_lookback_days: int | None = None,
+        include_garment_group_popularity: bool = False,
+        garment_group_popularity_lookback_days: int | None = None,
+        garment_group_max_history_items: int | None = None,
         content_similarity_source_name: str | None = None,
         content_similarity_manifest_path: Path | str | None = None,
         content_similarity_popularity_prior_weight: float | None = None,
@@ -291,6 +321,12 @@ class ProjectPaths:
             lookback_days: Optional recent-popularity lookback length.
             co_visitation_history_items: Optional co-visitation history length.
             co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            include_age_segment_popularity: Whether age-segment popularity is included.
+            age_segment_bucket_size: Optional age-bucket width.
+            age_segment_popularity_lookback_days: Optional segment-popularity lookback.
+            include_garment_group_popularity: Whether garment-group affinity rows are included.
+            garment_group_popularity_lookback_days: Optional garment-group popularity lookback.
+            garment_group_max_history_items: Optional history length used for garment affinities.
             content_similarity_source_name: Optional cached content source name.
             content_similarity_manifest_path: Optional cached embedding manifest path.
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
@@ -310,6 +346,12 @@ class ProjectPaths:
             lookback_days=lookback_days,
             co_visitation_history_items=co_visitation_history_items,
             co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            include_age_segment_popularity=include_age_segment_popularity,
+            age_segment_bucket_size=age_segment_bucket_size,
+            age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+            include_garment_group_popularity=include_garment_group_popularity,
+            garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+            garment_group_max_history_items=garment_group_max_history_items,
             content_similarity_source_name=content_similarity_source_name,
             content_similarity_manifest_path=content_similarity_manifest_path,
             content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
@@ -331,6 +373,12 @@ class ProjectPaths:
         lookback_days: int | None = None,
         co_visitation_history_items: int | None = None,
         co_visitation_neighbors_per_item: int | None = None,
+        include_age_segment_popularity: bool = False,
+        age_segment_bucket_size: int | None = None,
+        age_segment_popularity_lookback_days: int | None = None,
+        include_garment_group_popularity: bool = False,
+        garment_group_popularity_lookback_days: int | None = None,
+        garment_group_max_history_items: int | None = None,
         content_similarity_source_name: str | None = None,
         content_similarity_manifest_path: Path | str | None = None,
         content_similarity_popularity_prior_weight: float | None = None,
@@ -349,6 +397,12 @@ class ProjectPaths:
             lookback_days: Optional recent-popularity lookback length.
             co_visitation_history_items: Optional co-visitation history length.
             co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            include_age_segment_popularity: Whether age-segment popularity is included.
+            age_segment_bucket_size: Optional age-bucket width.
+            age_segment_popularity_lookback_days: Optional segment-popularity lookback.
+            include_garment_group_popularity: Whether garment-group affinity rows are included.
+            garment_group_popularity_lookback_days: Optional garment-group popularity lookback.
+            garment_group_max_history_items: Optional history length used for garment affinities.
             content_similarity_source_name: Optional cached content source name.
             content_similarity_manifest_path: Optional cached embedding manifest path.
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
@@ -368,6 +422,12 @@ class ProjectPaths:
             lookback_days=lookback_days,
             co_visitation_history_items=co_visitation_history_items,
             co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            include_age_segment_popularity=include_age_segment_popularity,
+            age_segment_bucket_size=age_segment_bucket_size,
+            age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+            include_garment_group_popularity=include_garment_group_popularity,
+            garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+            garment_group_max_history_items=garment_group_max_history_items,
             content_similarity_source_name=content_similarity_source_name,
             content_similarity_manifest_path=content_similarity_manifest_path,
             content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
@@ -390,6 +450,12 @@ class ProjectPaths:
         lookback_days: int | None = None,
         co_visitation_history_items: int | None = None,
         co_visitation_neighbors_per_item: int | None = None,
+        include_age_segment_popularity: bool = False,
+        age_segment_bucket_size: int | None = None,
+        age_segment_popularity_lookback_days: int | None = None,
+        include_garment_group_popularity: bool = False,
+        garment_group_popularity_lookback_days: int | None = None,
+        garment_group_max_history_items: int | None = None,
         content_similarity_source_name: str | None = None,
         content_similarity_manifest_path: Path | str | None = None,
         content_similarity_popularity_prior_weight: float | None = None,
@@ -407,6 +473,12 @@ class ProjectPaths:
             lookback_days: Optional recent-popularity lookback length.
             co_visitation_history_items: Optional co-visitation history length.
             co_visitation_neighbors_per_item: Optional co-visitation neighbor count.
+            include_age_segment_popularity: Whether age-segment popularity is included.
+            age_segment_bucket_size: Optional age-bucket width.
+            age_segment_popularity_lookback_days: Optional segment-popularity lookback.
+            include_garment_group_popularity: Whether garment-group affinity rows are included.
+            garment_group_popularity_lookback_days: Optional garment-group popularity lookback.
+            garment_group_max_history_items: Optional history length used for garment affinities.
             content_similarity_source_name: Optional cached content source name.
             content_similarity_manifest_path: Optional cached embedding manifest path.
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
@@ -433,6 +505,12 @@ class ProjectPaths:
             lookback_days=lookback_days,
             co_visitation_history_items=co_visitation_history_items,
             co_visitation_neighbors_per_item=co_visitation_neighbors_per_item,
+            include_age_segment_popularity=include_age_segment_popularity,
+            age_segment_bucket_size=age_segment_bucket_size,
+            age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+            include_garment_group_popularity=include_garment_group_popularity,
+            garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+            garment_group_max_history_items=garment_group_max_history_items,
             content_similarity_source_name=content_similarity_source_name,
             content_similarity_manifest_path=content_similarity_manifest_path,
             content_similarity_popularity_prior_weight=content_similarity_popularity_prior_weight,
@@ -762,6 +840,12 @@ def _append_source_config_slug(
     lookback_days: int | None = None,
     co_visitation_history_items: int | None = None,
     co_visitation_neighbors_per_item: int | None = None,
+    include_age_segment_popularity: bool = False,
+    age_segment_bucket_size: int | None = None,
+    age_segment_popularity_lookback_days: int | None = None,
+    include_garment_group_popularity: bool = False,
+    garment_group_popularity_lookback_days: int | None = None,
+    garment_group_max_history_items: int | None = None,
     content_similarity_source_name: str | None = None,
     content_similarity_manifest_path: Path | str | None = None,
     content_similarity_popularity_prior_weight: float | None = None,
@@ -774,6 +858,18 @@ def _append_source_config_slug(
         name = f"{name}_lookback_{lookback_days}"
     if co_visitation_history_items is not None and co_visitation_neighbors_per_item is not None:
         name = f"{name}_covis_h{co_visitation_history_items}_n{co_visitation_neighbors_per_item}"
+    name = _append_age_segment_slug(
+        name,
+        include_age_segment_popularity=include_age_segment_popularity,
+        age_segment_bucket_size=age_segment_bucket_size,
+        age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+    )
+    name = _append_garment_group_slug(
+        name,
+        include_garment_group_popularity=include_garment_group_popularity,
+        garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+        garment_group_max_history_items=garment_group_max_history_items,
+    )
     content_slug = _content_similarity_slug(
         source_name=content_similarity_source_name,
         manifest_path=content_similarity_manifest_path,
@@ -809,6 +905,44 @@ def _content_similarity_slug(
         popularity_lookback_days=popularity_lookback_days,
         candidate_pool_size=candidate_pool_size,
     )
+
+
+def _append_age_segment_slug(
+    name: str,
+    *,
+    include_age_segment_popularity: bool,
+    age_segment_bucket_size: int | None,
+    age_segment_popularity_lookback_days: int | None,
+) -> str:
+    """Append age-segment candidate-source config tokens to a path stem."""
+
+    if not include_age_segment_popularity:
+        return name
+    name = f"{name}_age_segment"
+    if age_segment_bucket_size is not None:
+        name = f"{name}_b{age_segment_bucket_size}"
+    if age_segment_popularity_lookback_days is not None:
+        name = f"{name}_lookback{age_segment_popularity_lookback_days}"
+    return name
+
+
+def _append_garment_group_slug(
+    name: str,
+    *,
+    include_garment_group_popularity: bool,
+    garment_group_popularity_lookback_days: int | None,
+    garment_group_max_history_items: int | None,
+) -> str:
+    """Append garment-group candidate-source config tokens to a path stem."""
+
+    if not include_garment_group_popularity:
+        return name
+    name = f"{name}_garment_group"
+    if garment_group_popularity_lookback_days is not None:
+        name = f"{name}_lookback{garment_group_popularity_lookback_days}"
+    if garment_group_max_history_items is not None:
+        name = f"{name}_h{garment_group_max_history_items}"
+    return name
 
 
 def _append_content_prior_slug(
