@@ -85,6 +85,12 @@ Deterministic ranking
 .. automodule:: hm_recsys.ranking.deterministic
    :members:
 
+Deterministic ranker tuning
+---------------------------
+
+.. automodule:: hm_recsys.ranking.deterministic_tuning
+   :members:
+
 Learned linear ranking
 ----------------------
 
