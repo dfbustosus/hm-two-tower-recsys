@@ -175,6 +175,12 @@ Two-tower example export
 .. automodule:: hm_recsys.training.two_tower_export
    :members:
 
+Two-tower retrieval smoke
+-------------------------
+
+.. automodule:: hm_recsys.training.two_tower_retrieval
+   :members:
+
 Infrastructure paths
 --------------------
 
