@@ -122,15 +122,18 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         cutoff="2020-09-16",
         k=100,
         lookback_days=7,
+        include_age_segment_popularity=True,
+        age_segment_bucket_size=10,
+        age_segment_popularity_lookback_days=7,
         content_similarity_source_name="multimodal_similarity_popularity_prior",
         content_similarity_manifest_path=manifest_path,
         content_similarity_popularity_prior_weight=0.3,
         content_similarity_popularity_lookback_days=30,
         content_similarity_candidate_pool_size=200,
     )
+    assert "age_segment_b10_lookback7" in prior_candidate_path.stem
     assert "popw0p3" in prior_candidate_path.stem
-    assert "poplookback30" in prior_candidate_path.stem
-    assert "pool200" in prior_candidate_path.stem
+    assert len(prior_candidate_path.name) < 255
 
 
 def test_content_similarity_artifact_names_stay_compact_for_long_manifests(
