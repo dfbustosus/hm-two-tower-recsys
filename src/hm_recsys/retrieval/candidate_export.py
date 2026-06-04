@@ -33,9 +33,23 @@ from hm_recsys.retrieval.content_similarity import (
     build_content_similarity_candidate_source_records,
     build_content_similarity_index,
 )
+from hm_recsys.retrieval.metadata_affinity import (
+    GARMENT_GROUP_COLUMN,
+    ArticleAttributePopularityIndex,
+    build_article_attribute_popularity_candidates,
+    build_article_attribute_popularity_index,
+)
+from hm_recsys.retrieval.segment_popularity import (
+    DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+    AgeSegmentPopularityIndex,
+    build_age_segment_popularity_candidates,
+    build_age_segment_popularity_index,
+)
 from hm_recsys.retrieval.source_names import (
+    AGE_SEGMENT_POPULARITY_SOURCE,
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    GARMENT_GROUP_POPULARITY_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
@@ -87,6 +101,12 @@ class CandidateExportSummary:
         include_co_visitation: Whether co-visitation rows were exported.
         co_visitation_max_history_items: Co-visitation customer-history length.
         co_visitation_max_neighbors_per_item: Co-visitation neighbor cap per item.
+        include_age_segment_popularity: Whether age-segment popularity rows were exported.
+        age_segment_bucket_size: Width of customer age buckets when segment rows are exported.
+        age_segment_popularity_lookback_days: Pre-cutoff lookback used for segment counts.
+        include_garment_group_popularity: Whether garment-group affinity rows were exported.
+        garment_group_popularity_lookback_days: Pre-cutoff lookback used for group counts.
+        garment_group_max_history_items: Customer history length used for group affinities.
         content_similarity_manifest_path: Optional cached embedding manifest path.
         content_similarity_source_name: Source name for content-similarity rows.
         content_similarity_max_history_items: Customer-history length for content queries.
@@ -112,6 +132,12 @@ class CandidateExportSummary:
     include_co_visitation: bool
     co_visitation_max_history_items: int
     co_visitation_max_neighbors_per_item: int
+    include_age_segment_popularity: bool
+    age_segment_bucket_size: int | None
+    age_segment_popularity_lookback_days: int | None
+    include_garment_group_popularity: bool
+    garment_group_popularity_lookback_days: int | None
+    garment_group_max_history_items: int | None
     content_similarity_manifest_path: str | None
     content_similarity_source_name: str | None
     content_similarity_max_history_items: int | None
@@ -135,6 +161,14 @@ def write_validation_candidate_export(
     include_co_visitation: bool = True,
     co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    include_age_segment_popularity: bool = False,
+    customer_segment_by_id: Mapping[str, str] | None = None,
+    age_segment_bucket_size: int = DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+    age_segment_popularity_lookback_days: int | None = None,
+    include_garment_group_popularity: bool = False,
+    article_garment_group_by_id: Mapping[str, str] | None = None,
+    garment_group_popularity_lookback_days: int | None = None,
+    garment_group_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     content_similarity_manifest_path: Path | str | None = None,
     content_similarity_source_name: str = MULTIMODAL_SIMILARITY_SOURCE,
     content_similarity_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
@@ -163,6 +197,21 @@ def write_validation_candidate_export(
         co_visitation_max_history_items: Recent unique customer-history length
             used by co-visitation.
         co_visitation_max_neighbors_per_item: Maximum neighbors retained per item.
+        include_age_segment_popularity: Whether to export customer age-segment
+            popularity rows.
+        customer_segment_by_id: Customer-to-age-segment mapping required when
+            ``include_age_segment_popularity`` is enabled.
+        age_segment_bucket_size: Width of age buckets used to build the mapping.
+        age_segment_popularity_lookback_days: Optional pre-cutoff segment
+            popularity lookback. Defaults to ``popularity_lookback_days``.
+        include_garment_group_popularity: Whether to export recent popularity rows
+            from garment groups seen in the customer's pre-cutoff history.
+        article_garment_group_by_id: Article-to-garment-group mapping required
+            when garment-group popularity is enabled.
+        garment_group_popularity_lookback_days: Optional pre-cutoff lookback used
+            for garment-group article counts. Defaults to ``popularity_lookback_days``.
+        garment_group_max_history_items: Recent unique customer-history articles
+            used to infer garment-group affinities.
         content_similarity_manifest_path: Optional embedding-cache manifest used to
             export content-similarity rows.
         content_similarity_source_name: Source label for content rows.
@@ -195,6 +244,28 @@ def write_validation_candidate_export(
         raise ValueError("content_similarity_source_name must not be empty")
     if content_similarity_manifest_path is not None and content_similarity_max_history_items <= 0:
         raise ValueError("content_similarity_max_history_items must be positive")
+    if include_age_segment_popularity and customer_segment_by_id is None:
+        raise ValueError("customer_segment_by_id is required for age-segment popularity")
+    if age_segment_bucket_size <= 0:
+        raise ValueError("age_segment_bucket_size must be positive")
+    resolved_age_segment_lookback_days = (
+        age_segment_popularity_lookback_days
+        if age_segment_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_age_segment_lookback_days <= 0:
+        raise ValueError("age_segment_popularity_lookback_days must be positive")
+    if include_garment_group_popularity and article_garment_group_by_id is None:
+        raise ValueError("article_garment_group_by_id is required for garment-group popularity")
+    if garment_group_max_history_items <= 0:
+        raise ValueError("garment_group_max_history_items must be positive")
+    resolved_garment_group_lookback_days = (
+        garment_group_popularity_lookback_days
+        if garment_group_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_garment_group_lookback_days <= 0:
+        raise ValueError("garment_group_popularity_lookback_days must be positive")
 
     started_at = perf_counter()
     validation_data = summarize_temporal_split_with_labels(transaction_iter_factory(), split)
@@ -220,6 +291,31 @@ def write_validation_candidate_export(
             max_neighbors_per_item=co_visitation_max_neighbors_per_item,
         )
         if include_co_visitation
+        else None
+    )
+    age_segment_index = (
+        build_age_segment_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            customer_segment_by_id=customer_segment_by_id or {},
+            lookback_days=resolved_age_segment_lookback_days,
+            max_articles_per_segment=k,
+        )
+        if include_age_segment_popularity
+        else None
+    )
+    garment_group_index = (
+        build_article_attribute_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            target_customer_ids=target_customer_ids,
+            article_attribute_by_id=article_garment_group_by_id or {},
+            attribute_name=GARMENT_GROUP_COLUMN,
+            lookback_days=resolved_garment_group_lookback_days,
+            max_history_items=garment_group_max_history_items,
+            max_articles_per_attribute=k,
+        )
+        if include_garment_group_popularity
         else None
     )
     content_similarity_index = (
@@ -252,6 +348,8 @@ def write_validation_candidate_export(
             recent_popularity=baseline_sources.recent_popularity[:k],
             all_time_popularity=baseline_sources.all_time_popularity[:k],
             co_visitation_index=co_visitation_index,
+            age_segment_index=age_segment_index,
+            garment_group_index=garment_group_index,
             content_similarity_index=content_similarity_index,
             k=k,
         ):
@@ -272,6 +370,20 @@ def write_validation_candidate_export(
         include_co_visitation=include_co_visitation,
         co_visitation_max_history_items=co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=include_age_segment_popularity,
+        age_segment_bucket_size=(
+            age_segment_bucket_size if include_age_segment_popularity else None
+        ),
+        age_segment_popularity_lookback_days=(
+            resolved_age_segment_lookback_days if include_age_segment_popularity else None
+        ),
+        include_garment_group_popularity=include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            resolved_garment_group_lookback_days if include_garment_group_popularity else None
+        ),
+        garment_group_max_history_items=(
+            garment_group_max_history_items if include_garment_group_popularity else None
+        ),
         content_similarity_manifest_path=(
             str(Path(content_similarity_manifest_path).expanduser().resolve())
             if content_similarity_manifest_path is not None
@@ -401,6 +513,8 @@ def _iter_candidate_records(
     all_time_popularity: Sequence[str],
     co_visitation_index: CoVisitationIndex | None,
     k: int,
+    age_segment_index: AgeSegmentPopularityIndex | None = None,
+    garment_group_index: ArticleAttributePopularityIndex | None = None,
     content_similarity_index: ContentSimilarityIndex | None = None,
 ) -> Iterable[CandidateRecord]:
     """Yield source-specific candidate records in deterministic source order."""
@@ -412,6 +526,8 @@ def _iter_candidate_records(
             recent_popularity=recent_popularity,
             all_time_popularity=all_time_popularity,
             co_visitation_index=co_visitation_index,
+            age_segment_index=age_segment_index,
+            garment_group_index=garment_group_index,
             content_similarity_index=content_similarity_index,
             k=k,
         )
@@ -424,6 +540,8 @@ def iter_candidate_records_for_customer(
     all_time_popularity: Sequence[str],
     co_visitation_index: CoVisitationIndex | None,
     k: int,
+    age_segment_index: AgeSegmentPopularityIndex | None = None,
+    garment_group_index: ArticleAttributePopularityIndex | None = None,
     content_similarity_index: ContentSimilarityIndex | None = None,
 ) -> Iterable[CandidateRecord]:
     """Yield ranker-ready source rows for one customer.
@@ -434,6 +552,8 @@ def iter_candidate_records_for_customer(
         recent_popularity: Global recent-popularity ranking.
         all_time_popularity: Global all-time popularity ranking.
         co_visitation_index: Optional co-visitation index for item-item rows.
+        age_segment_index: Optional age-segment popularity index.
+        garment_group_index: Optional garment-group affinity popularity index.
         k: Maximum candidates emitted per source.
         content_similarity_index: Optional cached content embedding index.
 
@@ -467,6 +587,36 @@ def iter_candidate_records_for_customer(
             )
             for candidate in build_co_visitation_candidate_records(
                 co_visitation_index,
+                customer_id,
+                k=k,
+            )
+        )
+    if age_segment_index is not None:
+        yield from (
+            CandidateRecord(
+                customer_id=customer_id,
+                article_id=candidate.article_id,
+                source=AGE_SEGMENT_POPULARITY_SOURCE,
+                source_rank=candidate.rank,
+                source_score=candidate.score,
+            )
+            for candidate in build_age_segment_popularity_candidates(
+                age_segment_index,
+                customer_id,
+                k=k,
+            )
+        )
+    if garment_group_index is not None:
+        yield from (
+            CandidateRecord(
+                customer_id=customer_id,
+                article_id=candidate.article_id,
+                source=GARMENT_GROUP_POPULARITY_SOURCE,
+                source_rank=candidate.rank,
+                source_score=candidate.score,
+            )
+            for candidate in build_article_attribute_popularity_candidates(
+                garment_group_index,
                 customer_id,
                 k=k,
             )
