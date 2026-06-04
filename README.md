@@ -503,11 +503,11 @@ bounded smoke run:
 make two-tower-example-export CUTOFF=2020-09-16
 ```
 
-By default this exports the first `100000` unique pre-cutoff positive pairs, one
-deterministic random negative per positive, and article/customer mapping CSVs.
-Negatives are sampled only from articles known before the cutoff and exclude all
-pre-cutoff positives for the selected customer. To change the cap or intentionally
-run a full export:
+By default the Make target exports `100000` unique pre-cutoff positive pairs using
+latest-positive selection, one deterministic random negative per positive, and
+article/customer mapping CSVs. Negatives are sampled only from articles known
+before the cutoff and exclude all pre-cutoff positives for the selected customer.
+To change the cap or intentionally run a full export:
 
 ```bash
 make two-tower-example-export \
@@ -525,8 +525,31 @@ Artifacts are written under ignored local storage:
 artifacts/two-tower/
 ```
 
+Train and evaluate the first dependency-light two-tower retrieval smoke model:
+
+```bash
+make two-tower-retrieval-smoke CUTOFF=2020-09-16
+```
+
+This command first exports cutoff-safe examples, then trains a small pure-Python
+customer/item embedding model with logistic dot-product loss, retrieves top-K
+article candidates for mapped validation customers, and reports MAP@12 plus
+candidate Recall@12/50/100.
+It is a challenger candidate source only. It must improve candidate recall or
+downstream MAP@12 before it is blended into the ranker or used for submissions.
+Use bounded settings for fast iteration:
+
+```bash
+make two-tower-retrieval-smoke \
+  CUTOFF=2020-09-16 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=10000 \
+  TWO_TOWER_MAX_EVAL_CUSTOMERS=1000 \
+  TWO_TOWER_MAX_RETRIEVAL_ARTICLES=5000 \
+  TWO_TOWER_EVALUATION_KS="12 50 100"
+```
+
 ## Next implementation gate
 
-The next code milestone is a minimal two-tower training/evaluation smoke run
-that consumes the exported examples, retrieves candidates, and must improve
-candidate recall or downstream MAP@12 before promotion.
+The next code milestone is turning two-tower retrieval into a ranker-ready
+candidate source only if the smoke reports useful recall on leakage-safe temporal
+validation.
