@@ -57,6 +57,9 @@ CONTENT_SIMILARITY_POPULARITY_LOOKBACK_DAYS ?=
 CONTENT_SIMILARITY_CANDIDATE_POOL_SIZE ?=
 LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST ?=
 LEARNED_RANKER_CONTENT_SIMILARITY_SOURCE ?= multimodal_similarity
+INCLUDE_AGE_SEGMENT_POPULARITY ?=
+AGE_SEGMENT_BUCKET_SIZE ?= 10
+AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS ?=
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
@@ -241,6 +244,12 @@ candidate-export: venv
 	if [[ -n "$(CANDIDATE_EXPORT_MAX_CUSTOMERS)" ]]; then \
 		extra_args="$$extra_args --max-target-customers $(CANDIDATE_EXPORT_MAX_CUSTOMERS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_AGE_SEGMENT_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-age-segment-popularity --age-segment-bucket-size $(AGE_SEGMENT_BUCKET_SIZE)"; \
+	fi; \
+	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli export-candidates --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(CANDIDATE_K)" $$extra_args
 
 ranker-baseline: venv
@@ -249,6 +258,12 @@ ranker-baseline: venv
 	if [[ -n "$(RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
 		extra_args="$$extra_args --max-target-customers $(RANKER_MAX_TARGET_CUSTOMERS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_AGE_SEGMENT_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-age-segment-popularity --age-segment-bucket-size $(AGE_SEGMENT_BUCKET_SIZE)"; \
+	fi; \
+	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" $$extra_args
 
 learned-ranker-baseline: venv
@@ -256,6 +271,12 @@ learned-ranker-baseline: venv
 	@extra_args=""; \
 	if [[ -n "$(LEARNED_RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
 		extra_args="$$extra_args --max-target-customers $(LEARNED_RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_AGE_SEGMENT_POPULARITY)" ]]; then \
+		extra_args="$$extra_args --include-age-segment-popularity --age-segment-bucket-size $(AGE_SEGMENT_BUCKET_SIZE)"; \
+	fi; \
+	if [[ -n "$(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)" ]]; then \
+		extra_args="$$extra_args --age-segment-popularity-lookback-days $(AGE_SEGMENT_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	if [[ -n "$(LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST)" ]]; then \
 		extra_args="$$extra_args --content-similarity-manifest-path $(LEARNED_RANKER_CONTENT_SIMILARITY_MANIFEST) --content-similarity-source-name $(LEARNED_RANKER_CONTENT_SIMILARITY_SOURCE)"; \
