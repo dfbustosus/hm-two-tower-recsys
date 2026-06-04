@@ -219,17 +219,39 @@ def test_project_paths_include_two_tower_export_locations(tmp_path: Path) -> Non
         negatives_per_positive=2,
         seed=42,
         max_positive_examples=1000,
+        positive_selection="latest",
     )
 
     assert examples_path.parent == tmp_path / "artifacts" / "two-tower"
     assert examples_path.name == (
-        "two_tower_examples_cutoff_2020-09-16_neg2_seed42_first_1000_positives.csv"
+        "two_tower_examples_cutoff_2020-09-16_neg2_seed42_first_1000_positives_latest.csv"
     )
     assert paths.two_tower_customer_mapping_path(examples_path).name.endswith("_customers.csv")
     assert paths.two_tower_article_mapping_path(examples_path).name.endswith("_articles.csv")
     assert paths.two_tower_example_export_report_path(examples_path) == (
         tmp_path / "artifacts" / "two-tower" / f"{examples_path.stem}.json"
     )
+    retrieval_report_path = paths.two_tower_retrieval_report_path(
+        examples_path,
+        embedding_dim=16,
+        epochs=3,
+        k=12,
+        evaluation_ks=(12, 50, 100),
+        loss="bpr",
+        positive_recency_half_life_days=7,
+        popularity_prior_weight=0.25,
+        popularity_prior_lookback_days=7,
+        max_eval_customers=1000,
+        max_retrieval_articles=5000,
+    )
+    assert "retrieval_dim16_epochs3_k12" in retrieval_report_path.stem
+    assert "recall_12_50_100" in retrieval_report_path.stem
+    assert "loss_bpr" in retrieval_report_path.stem
+    assert "rechalf7" in retrieval_report_path.stem
+    assert "popw0p25" in retrieval_report_path.stem
+    assert "poplookback7" in retrieval_report_path.stem
+    assert "first_1000_customers" in retrieval_report_path.stem
+    assert "pool_5000_articles" in retrieval_report_path.stem
 
 
 def test_project_paths_include_article_image_inventory_locations(tmp_path: Path) -> None:
