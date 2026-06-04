@@ -83,6 +83,11 @@ from hm_recsys.retrieval.content_similarity_diagnostics import (
     evaluate_cached_content_similarity,
     write_content_similarity_diagnostics_report,
 )
+from hm_recsys.retrieval.metadata_affinity import load_article_attribute_values
+from hm_recsys.retrieval.segment_popularity import (
+    DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+    load_customer_age_segments,
+)
 from hm_recsys.retrieval.source_names import (
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
@@ -272,6 +277,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for smoke exports.",
     )
+    _add_age_segment_popularity_arguments(candidate_export_parser)
+    _add_garment_group_popularity_arguments(candidate_export_parser)
     _add_content_similarity_candidate_arguments(candidate_export_parser)
     candidate_export_parser.add_argument("--project-root", type=Path, default=None)
     candidate_export_parser.add_argument("--raw-data-dir", type=Path, default=None)
@@ -319,6 +326,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for smoke evaluations.",
     )
+    _add_age_segment_popularity_arguments(ranker_parser)
+    _add_garment_group_popularity_arguments(ranker_parser)
     _add_content_similarity_candidate_arguments(ranker_parser)
     ranker_parser.add_argument("--project-root", type=Path, default=None)
     ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
@@ -377,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to train and eval windows.",
     )
+    _add_age_segment_popularity_arguments(learned_ranker_parser)
+    _add_garment_group_popularity_arguments(learned_ranker_parser)
     _add_content_similarity_candidate_arguments(learned_ranker_parser)
     learned_ranker_parser.add_argument("--project-root", type=Path, default=None)
     learned_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
@@ -435,6 +446,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to all rolling windows.",
     )
+    _add_age_segment_popularity_arguments(rolling_ranker_parser)
+    _add_garment_group_popularity_arguments(rolling_ranker_parser)
     _add_content_similarity_candidate_arguments(rolling_ranker_parser)
     rolling_ranker_parser.add_argument("--project-root", type=Path, default=None)
     rolling_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
@@ -710,6 +723,62 @@ def _add_content_similarity_candidate_arguments(parser: argparse.ArgumentParser)
         "--include-content-history",
         action="store_true",
         help="Do not filter pre-cutoff history articles from content candidates.",
+    )
+
+
+def _add_age_segment_popularity_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional age-segment popularity candidate-source arguments."""
+
+    parser.add_argument(
+        "--include-age-segment-popularity",
+        action="store_true",
+        help="Include recent article popularity among customers in the same age bucket.",
+    )
+    parser.add_argument(
+        "--age-segment-bucket-size",
+        type=int,
+        default=DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+        help="Age bucket width for segment popularity. Defaults to 10 years.",
+    )
+    parser.add_argument(
+        "--age-segment-popularity-lookback-days",
+        type=int,
+        default=None,
+        help=(
+            "Optional pre-cutoff lookback for age-segment popularity. "
+            "Defaults to global lookback."
+        ),
+    )
+
+
+def _add_garment_group_popularity_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional garment-group affinity popularity candidate-source arguments."""
+
+    parser.add_argument(
+        "--include-garment-group-popularity",
+        action="store_true",
+        help=(
+            "Include recent article popularity from garment groups seen in each "
+            "customer's pre-cutoff history."
+        ),
+    )
+    parser.add_argument(
+        "--garment-group-popularity-lookback-days",
+        type=int,
+        default=None,
+        help=(
+            "Optional pre-cutoff lookback for garment-group popularity. "
+            "Defaults to global lookback."
+        ),
+    )
+    parser.add_argument(
+        "--garment-group-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+        help=(
+            "Recent unique customer-history articles used for garment-group affinities. "
+            f"Defaults to {DEFAULT_MAX_HISTORY_ITEMS}."
+        ),
     )
 
 
@@ -989,6 +1058,7 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     content_source_name = _effective_content_similarity_source_name(args)
+    customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     output_path = args.output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
         k=args.k,
@@ -998,6 +1068,13 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1037,6 +1114,10 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        customer_segment_by_id=customer_age_segments,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1076,6 +1157,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     content_source_name = _effective_content_similarity_source_name(args)
+    customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     candidate_output_path = args.candidate_output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
         k=args.candidate_k,
@@ -1085,6 +1167,13 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1127,6 +1216,13 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
+        ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
         ),
@@ -1160,6 +1256,10 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        customer_segment_by_id=customer_age_segments,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1226,6 +1326,7 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     evaluation_split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     content_source_name = _effective_content_similarity_source_name(args)
+    customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     train_split = (
         TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
         if args.train_cutoff is not None
@@ -1243,6 +1344,13 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1274,6 +1382,13 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1323,6 +1438,13 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
+        ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
         ),
@@ -1369,6 +1491,10 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        customer_segment_by_id=customer_age_segments,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1392,6 +1518,10 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        customer_segment_by_id=customer_age_segments,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1493,6 +1623,13 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -2270,6 +2407,13 @@ def _ranker_candidate_export_path(
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_age_segment_popularity=getattr(args, "include_age_segment_popularity", False),
+        age_segment_bucket_size=getattr(args, "age_segment_bucket_size", None),
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if getattr(args, "include_age_segment_popularity", False)
+            else None
+        ),
         content_similarity_source_name=(
             _effective_content_similarity_source_name(args)
             if getattr(args, "content_similarity_manifest_path", None) is not None
@@ -2339,6 +2483,16 @@ def _write_cached_ranker_candidate_export(
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=getattr(args, "include_age_segment_popularity", False),
+        customer_segment_by_id=_load_customer_age_segments_if_enabled(paths, args),
+        age_segment_bucket_size=getattr(
+            args, "age_segment_bucket_size", DEFAULT_AGE_SEGMENT_BUCKET_SIZE
+        ),
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if getattr(args, "include_age_segment_popularity", False)
+            else None
+        ),
         content_similarity_manifest_path=_resolve_optional_path_under_root(
             paths, getattr(args, "content_similarity_manifest_path", None)
         ),
@@ -2454,6 +2608,51 @@ def _effective_diagnostics_content_similarity_source_name(args: argparse.Namespa
     if prior_weight > 0.0 and source_name == MULTIMODAL_SIMILARITY_SOURCE:
         return MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE
     return source_name
+
+
+def _age_segment_popularity_lookback_days(args: argparse.Namespace) -> int:
+    """Return the resolved age-segment popularity lookback for CLI args."""
+
+    return int(
+        args.age_segment_popularity_lookback_days
+        if args.age_segment_popularity_lookback_days is not None
+        else args.popularity_lookback_days
+    )
+
+
+def _garment_group_popularity_lookback_days(args: argparse.Namespace) -> int:
+    """Return the resolved garment-group popularity lookback for CLI args."""
+
+    return int(
+        args.garment_group_popularity_lookback_days
+        if args.garment_group_popularity_lookback_days is not None
+        else args.popularity_lookback_days
+    )
+
+
+def _load_customer_age_segments_if_enabled(
+    paths: ProjectPaths,
+    args: argparse.Namespace,
+) -> dict[str, str] | None:
+    """Load customer age-segment mapping when the source is enabled."""
+
+    if not getattr(args, "include_age_segment_popularity", False):
+        return None
+    return load_customer_age_segments(
+        paths.raw_data_dir,
+        bucket_size=args.age_segment_bucket_size,
+    )
+
+
+def _load_article_garment_groups_if_enabled(
+    paths: ProjectPaths,
+    args: argparse.Namespace,
+) -> dict[str, str] | None:
+    """Load article garment-group mapping when the source is enabled."""
+
+    if not getattr(args, "include_garment_group_popularity", False):
+        return None
+    return load_article_attribute_values(paths.raw_data_dir)
 
 
 def _learned_ranker_config_slug(args: argparse.Namespace) -> str:
