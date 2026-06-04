@@ -16,8 +16,10 @@ from hm_recsys.evaluation.metrics import mean_average_precision_at_k, recall_at_
 from hm_recsys.evaluation.temporal import TemporalSplit
 from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER, CandidateRecord
 from hm_recsys.retrieval.source_names import (
+    AGE_SEGMENT_POPULARITY_SOURCE,
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    GARMENT_GROUP_POPULARITY_SOURCE,
     IMAGE_SIMILARITY_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
@@ -56,6 +58,12 @@ class DeterministicRankerWeights:
         all_time_popularity_score_weight: Weight for all-time popularity reciprocal rank.
         co_visitation_presence_weight: Additive weight for co-visitation candidates.
         co_visitation_score_weight: Weight for ``log1p(co_visitation_score)``.
+        age_segment_popularity_presence_weight: Additive weight for age-segment
+            popularity candidates.
+        age_segment_popularity_score_weight: Weight for segment-popularity score.
+        garment_group_popularity_presence_weight: Additive weight for
+            garment-group affinity popularity candidates.
+        garment_group_popularity_score_weight: Weight for garment-group score.
         content_similarity_presence_weight: Additive weight for content candidates.
         content_similarity_score_weight: Weight for content cosine/source score.
         source_count_weight: Weight for the number of sources emitting the pair.
@@ -70,6 +78,10 @@ class DeterministicRankerWeights:
     all_time_popularity_score_weight: float = 0.15
     co_visitation_presence_weight: float = 0.35
     co_visitation_score_weight: float = 0.10
+    age_segment_popularity_presence_weight: float = 0.30
+    age_segment_popularity_score_weight: float = 0.20
+    garment_group_popularity_presence_weight: float = 0.40
+    garment_group_popularity_score_weight: float = 0.25
     content_similarity_presence_weight: float = 0.10
     content_similarity_score_weight: float = 0.05
     source_count_weight: float = 0.05
@@ -95,6 +107,10 @@ class CandidateFeatures:
         all_time_popularity_score: Source score from all-time popularity.
         co_visitation_rank: Optional source rank from co-visitation.
         co_visitation_score: Source score from co-visitation.
+        age_segment_popularity_rank: Optional source rank from age-segment popularity.
+        age_segment_popularity_score: Source score from age-segment popularity.
+        garment_group_popularity_rank: Optional source rank from garment-group popularity.
+        garment_group_popularity_score: Source score from garment-group popularity.
         content_similarity_rank: Optional source rank from cached content similarity.
         content_similarity_score: Source score from cached content similarity.
         source_count: Number of candidate sources emitting this pair.
@@ -113,6 +129,10 @@ class CandidateFeatures:
     all_time_popularity_score: float = 0.0
     co_visitation_rank: int | None = None
     co_visitation_score: float = 0.0
+    age_segment_popularity_rank: int | None = None
+    age_segment_popularity_score: float = 0.0
+    garment_group_popularity_rank: int | None = None
+    garment_group_popularity_score: float = 0.0
     content_similarity_rank: int | None = None
     content_similarity_score: float = 0.0
     source_count: int = 0
@@ -153,6 +173,24 @@ class CandidateFeatures:
                 self.co_visitation_rank, record.source_rank
             )
             self.co_visitation_score = max(self.co_visitation_score, record.source_score)
+        elif record.source == AGE_SEGMENT_POPULARITY_SOURCE:
+            self.age_segment_popularity_rank = _min_optional_rank(
+                self.age_segment_popularity_rank,
+                record.source_rank,
+            )
+            self.age_segment_popularity_score = max(
+                self.age_segment_popularity_score,
+                record.source_score,
+            )
+        elif record.source == GARMENT_GROUP_POPULARITY_SOURCE:
+            self.garment_group_popularity_rank = _min_optional_rank(
+                self.garment_group_popularity_rank,
+                record.source_rank,
+            )
+            self.garment_group_popularity_score = max(
+                self.garment_group_popularity_score,
+                record.source_score,
+            )
         elif record.source in CONTENT_SIMILARITY_SOURCES:
             self.content_similarity_rank = _min_optional_rank(
                 self.content_similarity_rank, record.source_rank
@@ -182,6 +220,18 @@ class CandidateFeatures:
         """Return whether co-visitation emitted this pair."""
 
         return self.co_visitation_rank is not None
+
+    @property
+    def has_age_segment_popularity(self) -> bool:
+        """Return whether age-segment popularity emitted this pair."""
+
+        return self.age_segment_popularity_rank is not None
+
+    @property
+    def has_garment_group_popularity(self) -> bool:
+        """Return whether garment-group affinity popularity emitted this pair."""
+
+        return self.garment_group_popularity_rank is not None
 
     @property
     def has_content_similarity(self) -> bool:
@@ -332,6 +382,15 @@ def score_candidate(
     if features.has_co_visitation:
         score += weights.co_visitation_presence_weight
         score += weights.co_visitation_score_weight * log1p(features.co_visitation_score)
+    if features.has_age_segment_popularity:
+        score += weights.age_segment_popularity_presence_weight
+        score += weights.age_segment_popularity_score_weight * features.age_segment_popularity_score
+    if features.has_garment_group_popularity:
+        score += weights.garment_group_popularity_presence_weight
+        score += (
+            weights.garment_group_popularity_score_weight
+            * features.garment_group_popularity_score
+        )
     if features.has_content_similarity:
         score += weights.content_similarity_presence_weight
         score += weights.content_similarity_score_weight * features.content_similarity_score
@@ -538,6 +597,10 @@ def _source_rank(features: CandidateFeatures, source: str) -> int | None:
         return features.all_time_popularity_rank
     if source == CO_VISITATION_SOURCE:
         return features.co_visitation_rank
+    if source == AGE_SEGMENT_POPULARITY_SOURCE:
+        return features.age_segment_popularity_rank
+    if source == GARMENT_GROUP_POPULARITY_SOURCE:
+        return features.garment_group_popularity_rank
     return None
 
 
