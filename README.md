@@ -363,6 +363,22 @@ Reports are written under:
 artifacts/ranker-baselines/
 ```
 
+To test the age-segment popularity challenger, add recent articles popular among
+customers in the same age bucket as a candidate source. Age buckets come from
+`customers.csv`, IDs remain strings, and transaction counts are cutoff-safe:
+
+```bash
+make learned-ranker-baseline \
+  CUTOFF=2020-09-16 \
+  LEARNED_RANKER_CANDIDATE_K=100 \
+  LEARNED_RANKER_MAX_TARGET_CUSTOMERS=1000 \
+  LEARNED_RANKER_LEARNING_RATE=0.02 \
+  INCLUDE_AGE_SEGMENT_POPULARITY=1
+```
+
+Treat this like every challenger: first validate on bounded smoke runs, then
+scale the customer cap, then run rolling validation before promotion.
+
 Train a leakage-safe learned linear ranker on the previous 7-day window and
 evaluate it on the requested validation cutoff:
 
