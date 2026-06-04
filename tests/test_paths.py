@@ -125,6 +125,9 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         include_age_segment_popularity=True,
         age_segment_bucket_size=10,
         age_segment_popularity_lookback_days=7,
+        include_garment_group_popularity=True,
+        garment_group_popularity_lookback_days=7,
+        garment_group_max_history_items=8,
         content_similarity_source_name="multimodal_similarity_popularity_prior",
         content_similarity_manifest_path=manifest_path,
         content_similarity_popularity_prior_weight=0.3,
@@ -132,6 +135,7 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         content_similarity_candidate_pool_size=200,
     )
     assert "age_segment_b10_lookback7" in prior_candidate_path.stem
+    assert "garment_group_lookback7_h8" in prior_candidate_path.stem
     assert "popw0p3" in prior_candidate_path.stem
     assert len(prior_candidate_path.name) < 255
 
