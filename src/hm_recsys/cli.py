@@ -1084,9 +1084,7 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
             else None
         ),
         garment_group_max_history_items=(
-            args.garment_group_max_history_items
-            if args.include_garment_group_popularity
-            else None
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1199,9 +1197,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
             else None
         ),
         garment_group_max_history_items=(
-            args.garment_group_max_history_items
-            if args.include_garment_group_popularity
-            else None
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1258,9 +1254,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
             else None
         ),
         garment_group_max_history_items=(
-            args.garment_group_max_history_items
-            if args.include_garment_group_popularity
-            else None
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1370,6 +1364,7 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
     evaluation_split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     content_source_name = _effective_content_similarity_source_name(args)
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
+    article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
     train_split = (
         TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
         if args.train_cutoff is not None
@@ -1394,6 +1389,15 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
             _age_segment_popularity_lookback_days(args)
             if args.include_age_segment_popularity
             else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1432,6 +1436,15 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
             _age_segment_popularity_lookback_days(args)
             if args.include_age_segment_popularity
             else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1488,6 +1501,15 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
             if args.include_age_segment_popularity
             else None
         ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
         ),
@@ -1538,6 +1560,10 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        article_garment_group_by_id=article_garment_groups,
+        garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
+        garment_group_max_history_items=args.garment_group_max_history_items,
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1565,6 +1591,10 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        article_garment_group_by_id=article_garment_groups,
+        garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
+        garment_group_max_history_items=args.garment_group_max_history_items,
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1673,6 +1703,15 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
             _age_segment_popularity_lookback_days(args)
             if args.include_age_segment_popularity
             else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -2457,6 +2496,21 @@ def _ranker_candidate_export_path(
             if getattr(args, "include_age_segment_popularity", False)
             else None
         ),
+        include_garment_group_popularity=getattr(
+            args,
+            "include_garment_group_popularity",
+            False,
+        ),
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if getattr(args, "include_garment_group_popularity", False)
+            else None
+        ),
+        garment_group_max_history_items=(
+            getattr(args, "garment_group_max_history_items", DEFAULT_MAX_HISTORY_ITEMS)
+            if getattr(args, "include_garment_group_popularity", False)
+            else None
+        ),
         content_similarity_source_name=(
             _effective_content_similarity_source_name(args)
             if getattr(args, "content_similarity_manifest_path", None) is not None
@@ -2535,6 +2589,22 @@ def _write_cached_ranker_candidate_export(
             _age_segment_popularity_lookback_days(args)
             if getattr(args, "include_age_segment_popularity", False)
             else None
+        ),
+        include_garment_group_popularity=getattr(
+            args,
+            "include_garment_group_popularity",
+            False,
+        ),
+        article_garment_group_by_id=_load_article_garment_groups_if_enabled(paths, args),
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if getattr(args, "include_garment_group_popularity", False)
+            else None
+        ),
+        garment_group_max_history_items=getattr(
+            args,
+            "garment_group_max_history_items",
+            DEFAULT_MAX_HISTORY_ITEMS,
         ),
         content_similarity_manifest_path=_resolve_optional_path_under_root(
             paths, getattr(args, "content_similarity_manifest_path", None)
