@@ -388,8 +388,7 @@ def score_candidate(
     if features.has_garment_group_popularity:
         score += weights.garment_group_popularity_presence_weight
         score += (
-            weights.garment_group_popularity_score_weight
-            * features.garment_group_popularity_score
+            weights.garment_group_popularity_score_weight * features.garment_group_popularity_score
         )
     if features.has_content_similarity:
         score += weights.content_similarity_presence_weight
