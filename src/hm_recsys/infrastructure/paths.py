@@ -719,6 +719,7 @@ class ProjectPaths:
         negatives_per_positive: int,
         seed: int,
         max_positive_examples: int | None = None,
+        positive_selection: str | None = None,
     ) -> Path:
         """Return the default two-tower examples CSV path.
 
@@ -727,6 +728,7 @@ class ProjectPaths:
             negatives_per_positive: Requested negatives per positive pair.
             seed: Deterministic negative-sampling seed.
             max_positive_examples: Optional deterministic smoke-run cap.
+            positive_selection: Optional capped positive-selection strategy.
 
         Returns:
             Path under ``artifacts/two-tower/``.
@@ -738,6 +740,8 @@ class ProjectPaths:
         )
         if max_positive_examples is not None:
             name = f"{name}_first_{max_positive_examples}_positives"
+            if positive_selection is not None and positive_selection != "first":
+                name = f"{name}_{_safe_name(positive_selection)}"
         return self.artifacts_dir / "two-tower" / f"{name}.csv"
 
     def two_tower_customer_mapping_path(self, examples_path: Path | str) -> Path:
@@ -778,6 +782,48 @@ class ProjectPaths:
 
         stem = Path(examples_path).stem or "two_tower_examples"
         return self.artifacts_dir / "two-tower" / f"{_safe_name(stem)}.json"
+
+    def two_tower_retrieval_report_path(
+        self,
+        examples_path: Path | str,
+        embedding_dim: int,
+        epochs: int,
+        k: int,
+        evaluation_ks: Sequence[int] | None = None,
+        loss: str | None = None,
+        positive_recency_half_life_days: float | None = None,
+        popularity_prior_weight: float | None = None,
+        popularity_prior_lookback_days: int | None = None,
+        max_eval_customers: int | None = None,
+        max_retrieval_articles: int | None = None,
+    ) -> Path:
+        """Return the default JSON report path for a two-tower retrieval smoke run."""
+
+        stem = Path(examples_path).stem or "two_tower_examples"
+        name = f"{_safe_name(stem)}_retrieval_dim{embedding_dim}_epochs{epochs}_k{k}"
+        if evaluation_ks is not None:
+            name = f"{name}_recall_{_evaluation_k_slug(evaluation_ks)}"
+        if loss is not None and loss != "logistic":
+            name = f"{name}_loss_{_safe_name(loss)}"
+        if positive_recency_half_life_days is not None:
+            name = f"{name}_rechalf{_float_path_token(positive_recency_half_life_days)}"
+        if popularity_prior_weight is not None and popularity_prior_weight > 0.0:
+            name = f"{name}_popw{_float_path_token(popularity_prior_weight)}"
+            if popularity_prior_lookback_days is not None:
+                name = f"{name}_poplookback{popularity_prior_lookback_days}"
+        if max_eval_customers is not None:
+            name = f"{name}_first_{max_eval_customers}_customers"
+        if max_retrieval_articles is not None:
+            name = f"{name}_pool_{max_retrieval_articles}_articles"
+        return (
+            self.artifacts_dir
+            / "two-tower"
+            / _artifact_filename(
+                name,
+                "json",
+                max_stem_length=220,
+            )
+        )
 
     @property
     def article_image_inventory_manifest_path(self) -> Path:
@@ -1082,6 +1128,12 @@ def _append_content_prior_slug(
     if candidate_pool_size is not None:
         name = f"{name}_pool{candidate_pool_size}"
     return name
+
+
+def _evaluation_k_slug(evaluation_ks: Sequence[int]) -> str:
+    """Return a compact deterministic token for evaluation cutoffs."""
+
+    return "_".join(str(k) for k in sorted(set(evaluation_ks)))
 
 
 def _content_manifest_slug(manifest_path: Path | str) -> str:
