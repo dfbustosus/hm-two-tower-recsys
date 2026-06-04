@@ -47,6 +47,8 @@ def test_feature_vector_matches_schema() -> None:
         article_id=ARTICLE_1,
         repeat_rank=2,
         repeat_score=0.5,
+        age_segment_popularity_rank=3,
+        age_segment_popularity_score=0.7,
         content_similarity_rank=1,
         content_similarity_score=0.8,
         source_count=1,
@@ -59,9 +61,10 @@ def test_feature_vector_matches_schema() -> None:
     assert vector[0] == 1.0
     assert vector[1] == 1.0
     assert vector[3] == pytest.approx(0.5)
-    assert LINEAR_FEATURE_NAMES[-5] == "has_content_similarity"
-    assert vector[-5] == 1.0
-    assert vector[-4] == pytest.approx(0.8)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_age_segment_popularity")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("age_segment_popularity_score")] == pytest.approx(0.7)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_content_similarity")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("content_similarity_score")] == pytest.approx(0.8)
 
 
 def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
