@@ -41,6 +41,11 @@ from hm_recsys.ranking.deterministic import (
     evaluate_deterministic_ranker_from_csv,
     write_deterministic_ranker_report,
 )
+from hm_recsys.ranking.deterministic_tuning import (
+    select_deterministic_ranker_weights_from_csv,
+    tune_deterministic_ranker_from_csv,
+    write_deterministic_ranker_tuning_report,
+)
 from hm_recsys.ranking.linear import (
     LinearRankerConfig,
     build_learned_linear_ranker_report,
@@ -54,8 +59,11 @@ from hm_recsys.ranking.rolling import (
     write_rolling_ranker_validation_report,
 )
 from hm_recsys.ranking.submission import (
+    build_deterministic_ranker_submission_predictions,
+    build_deterministic_ranker_submission_report,
     build_learned_linear_ranker_submission_report,
     build_linear_ranker_submission_predictions,
+    write_deterministic_ranker_submission_report,
     write_learned_linear_ranker_submission_report,
 )
 from hm_recsys.retrieval.baselines import (
@@ -336,6 +344,67 @@ def build_parser() -> argparse.ArgumentParser:
     ranker_parser.add_argument("--report-path", type=Path, default=None)
     ranker_parser.set_defaults(handler=_handle_evaluate_ranker_baseline)
 
+    tuned_ranker_parser = subparsers.add_parser(
+        "tune-deterministic-ranker",
+        help="Tune deterministic ranker weights on the previous window and evaluate them.",
+    )
+    tuned_ranker_parser.add_argument(
+        "--cutoff", required=True, help="Evaluation cutoff date, YYYY-MM-DD."
+    )
+    tuned_ranker_parser.add_argument(
+        "--train-cutoff",
+        default=None,
+        help="Optional tuning-label cutoff. Defaults to previous non-overlapping window.",
+    )
+    tuned_ranker_parser.add_argument("--horizon-days", type=int, default=7)
+    tuned_ranker_parser.add_argument("--popularity-lookback-days", type=int, default=7)
+    tuned_ranker_parser.add_argument("--candidate-k", type=int, default=12)
+    tuned_ranker_parser.add_argument("--k", type=int, default=12)
+    tuned_ranker_parser.add_argument(
+        "--top-trials",
+        type=int,
+        default=10,
+        help="Number of top tuning-window weight trials to retain in the report.",
+    )
+    tuned_ranker_parser.add_argument(
+        "--no-co-visitation",
+        action="store_true",
+        help="Disable co-visitation candidate rows.",
+    )
+    tuned_ranker_parser.add_argument(
+        "--co-visitation-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+        help=(
+            "Recent unique articles per customer for co-visitation. "
+            f"Defaults to {DEFAULT_MAX_HISTORY_ITEMS}."
+        ),
+    )
+    tuned_ranker_parser.add_argument(
+        "--co-visitation-max-neighbors-per-item",
+        type=int,
+        default=DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+        help=(
+            "Neighbors retained per source article. "
+            f"Defaults to {DEFAULT_MAX_NEIGHBORS_PER_ITEM}."
+        ),
+    )
+    tuned_ranker_parser.add_argument(
+        "--max-target-customers",
+        type=int,
+        default=None,
+        help="Optional deterministic cap applied separately to tune and eval windows.",
+    )
+    _add_age_segment_popularity_arguments(tuned_ranker_parser)
+    _add_garment_group_popularity_arguments(tuned_ranker_parser)
+    _add_content_similarity_candidate_arguments(tuned_ranker_parser)
+    tuned_ranker_parser.add_argument("--project-root", type=Path, default=None)
+    tuned_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    tuned_ranker_parser.add_argument("--train-candidate-output-path", type=Path, default=None)
+    tuned_ranker_parser.add_argument("--eval-candidate-output-path", type=Path, default=None)
+    tuned_ranker_parser.add_argument("--report-path", type=Path, default=None)
+    tuned_ranker_parser.set_defaults(handler=_handle_tune_deterministic_ranker)
+
     learned_ranker_parser = subparsers.add_parser(
         "evaluate-learned-ranker-baseline",
         help="Train on the previous window and evaluate a learned linear ranker.",
@@ -498,6 +567,68 @@ def build_parser() -> argparse.ArgumentParser:
     learned_submission_parser.add_argument("--validation-report-path", type=Path, default=None)
     learned_submission_parser.add_argument("--report-path", type=Path, default=None)
     learned_submission_parser.set_defaults(handler=_handle_generate_learned_ranker_submission)
+
+    deterministic_submission_parser = subparsers.add_parser(
+        "generate-deterministic-ranker-submission",
+        help="Tune deterministic weights on the latest visible week and generate a CSV.",
+    )
+    deterministic_submission_parser.add_argument("--horizon-days", type=int, default=7)
+    deterministic_submission_parser.add_argument("--popularity-lookback-days", type=int, default=7)
+    deterministic_submission_parser.add_argument("--candidate-k", type=int, default=12)
+    deterministic_submission_parser.add_argument("--k", type=int, default=12)
+    deterministic_submission_parser.add_argument(
+        "--top-trials",
+        type=int,
+        default=10,
+        help="Number of top tuning-window weight trials to retain in the report.",
+    )
+    deterministic_submission_parser.add_argument(
+        "--no-co-visitation",
+        action="store_true",
+        help="Disable co-visitation candidate rows.",
+    )
+    deterministic_submission_parser.add_argument(
+        "--co-visitation-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+        help=(
+            "Recent unique articles per customer for co-visitation. "
+            f"Defaults to {DEFAULT_MAX_HISTORY_ITEMS}."
+        ),
+    )
+    deterministic_submission_parser.add_argument(
+        "--co-visitation-max-neighbors-per-item",
+        type=int,
+        default=DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+        help=(
+            "Neighbors retained per source article. "
+            f"Defaults to {DEFAULT_MAX_NEIGHBORS_PER_ITEM}."
+        ),
+    )
+    deterministic_submission_parser.add_argument(
+        "--max-target-customers",
+        type=int,
+        default=None,
+        help="Optional deterministic cap for the latest-window weight-selection customers only.",
+    )
+    _add_age_segment_popularity_arguments(deterministic_submission_parser)
+    _add_garment_group_popularity_arguments(deterministic_submission_parser)
+    deterministic_submission_parser.add_argument("--project-root", type=Path, default=None)
+    deterministic_submission_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    deterministic_submission_parser.add_argument(
+        "--train-candidate-output-path", type=Path, default=None
+    )
+    deterministic_submission_parser.add_argument(
+        "--train-candidate-report-path", type=Path, default=None
+    )
+    deterministic_submission_parser.add_argument("--output-path", type=Path, default=None)
+    deterministic_submission_parser.add_argument(
+        "--validation-report-path", type=Path, default=None
+    )
+    deterministic_submission_parser.add_argument("--report-path", type=Path, default=None)
+    deterministic_submission_parser.set_defaults(
+        handler=_handle_generate_deterministic_ranker_submission
+    )
 
     two_tower_export_parser = subparsers.add_parser(
         "export-two-tower-examples",
@@ -1350,6 +1481,153 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_tune_deterministic_ranker(args: argparse.Namespace) -> int:
+    """Handle the ``tune-deterministic-ranker`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` after writing candidate artifacts and the tuning report.
+    """
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    evaluation_split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    train_split = (
+        TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
+        if args.train_cutoff is not None
+        else previous_window_split(evaluation_split)
+    )
+    if train_split.validation_end > evaluation_split.cutoff:
+        raise ValueError("training label window must end before the evaluation cutoff")
+
+    train_candidate_path = (
+        _resolve_path_under_root(paths, args.train_candidate_output_path)
+        if args.train_candidate_output_path is not None
+        else _ranker_candidate_export_path(paths, train_split, args)
+    )
+    eval_candidate_path = (
+        _resolve_path_under_root(paths, args.eval_candidate_output_path)
+        if args.eval_candidate_output_path is not None
+        else _ranker_candidate_export_path(paths, evaluation_split, args)
+    )
+    content_source_name = _effective_content_similarity_source_name(args)
+    report_path = args.report_path or paths.deterministic_ranker_tuning_report_path(
+        train_cutoff=train_split.cutoff.isoformat(),
+        evaluation_cutoff=args.cutoff,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        max_target_customers=args.max_target_customers,
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        content_similarity_source_name=(
+            content_source_name if args.content_similarity_manifest_path is not None else None
+        ),
+        content_similarity_manifest_path=args.content_similarity_manifest_path,
+        content_similarity_popularity_prior_weight=(
+            args.content_similarity_popularity_prior_weight
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_popularity_lookback_days=(
+            args.content_similarity_popularity_lookback_days
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+        content_similarity_candidate_pool_size=(
+            args.content_similarity_candidate_pool_size
+            if args.content_similarity_manifest_path is not None
+            else None
+        ),
+    )
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    submission_customer_ids = load_submission_customer_ids(paths.raw_data_dir)
+    candidate_export_cache: dict[Path, Path] = {}
+    written_train_candidate_report_path = _write_cached_ranker_candidate_export(
+        candidate_export_cache,
+        paths,
+        train_split,
+        submission_customer_ids,
+        train_candidate_path,
+        args,
+    )
+    written_eval_candidate_report_path = _write_cached_ranker_candidate_export(
+        candidate_export_cache,
+        paths,
+        evaluation_split,
+        submission_customer_ids,
+        eval_candidate_path,
+        args,
+    )
+    train_labels = _validation_labels_for_split(
+        raw_data_dir=paths.raw_data_dir,
+        split=train_split,
+        submission_customer_ids=submission_customer_ids,
+        max_target_customers=args.max_target_customers,
+    )
+    eval_labels = _validation_labels_for_split(
+        raw_data_dir=paths.raw_data_dir,
+        split=evaluation_split,
+        submission_customer_ids=submission_customer_ids,
+        max_target_customers=args.max_target_customers,
+    )
+    report = tune_deterministic_ranker_from_csv(
+        train_candidate_path=train_candidate_path,
+        train_validation_labels=train_labels,
+        train_split=train_split,
+        evaluation_candidate_path=eval_candidate_path,
+        evaluation_validation_labels=eval_labels,
+        evaluation_split=evaluation_split,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        top_n=args.top_trials,
+    )
+    written_report_path = write_deterministic_ranker_tuning_report(report, report_path)
+
+    print(f"Tuning cutoff: {report.train_cutoff}")
+    print(f"Tuning label end exclusive: {report.train_validation_end_exclusive}")
+    print(f"Evaluation cutoff: {report.evaluation_cutoff}")
+    print(f"Evaluation end exclusive: {report.evaluation_end_exclusive}")
+    print(f"Weight trials: {report.trial_count}")
+    print(f"Default train MAP@{report.k}: {report.default_train.map_at_k:.8f}")
+    print(f"Selected train MAP@{report.k}: {report.selected_train.map_at_k:.8f}")
+    print(f"Default eval MAP@{report.k}: {report.default_evaluation.map_at_k:.8f}")
+    print(f"Selected eval MAP@{report.k}: {report.selected_evaluation.map_at_k:.8f}")
+    print(
+        f"Delta selected vs default eval MAP@{report.k}: "
+        f"{report.delta_selected_vs_default_map_at_k:.8f}"
+    )
+    print(f"Selected eval recall@{report.k}: {report.selected_evaluation.recall_at_k:.8f}")
+    print(f"Train candidate CSV: {train_candidate_path}")
+    print(f"Eval candidate CSV: {eval_candidate_path}")
+    print(f"Train candidate summary: {written_train_candidate_report_path}")
+    print(f"Eval candidate summary: {written_eval_candidate_report_path}")
+    print(f"Tuning report written to: {written_report_path}")
+    return 0
+
+
 def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
     """Handle the ``evaluate-learned-ranker-baseline`` subcommand.
 
@@ -2082,6 +2360,213 @@ def _handle_generate_learned_ranker_submission(args: argparse.Namespace) -> int:
     print(f"Submission valid: {validation_result.valid}")
     print(f"Validation report written to: {written_validation_report_path}")
     print(f"Learned-ranker submission report written to: {written_report_path}")
+    for failure in validation_result.failures:
+        print(f"- {failure}")
+    return 0 if validation_result.valid else 1
+
+
+def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -> int:
+    """Handle the ``generate-deterministic-ranker-submission`` subcommand."""
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    max_transaction_date = find_max_transaction_date(
+        iter_transaction_events(paths.raw_data_dir),
+        progress_interval=5_000_000,
+        progress_callback=lambda rows: print(
+            f"max-date transaction scan progress: {rows} rows",
+            flush=True,
+        ),
+    )
+    final_split = TemporalSplit(
+        cutoff=max_transaction_date + timedelta(days=1),
+        horizon_days=args.horizon_days,
+    )
+    tuning_split = previous_window_split(final_split)
+    train_candidate_path = (
+        _resolve_path_under_root(paths, args.train_candidate_output_path)
+        if args.train_candidate_output_path is not None
+        else _ranker_candidate_export_path(paths, tuning_split, args)
+    )
+    train_candidate_report_path = (
+        args.train_candidate_report_path or paths.candidate_export_report_path(train_candidate_path)
+    )
+    train_candidate_report_path = _resolve_path_under_root(paths, train_candidate_report_path)
+    output_path = args.output_path or paths.deterministic_ranker_submission_path(
+        k=args.k,
+        candidate_k=args.candidate_k,
+        lookback_days=args.popularity_lookback_days,
+        co_visitation_history_items=(
+            None if args.no_co_visitation else args.co_visitation_max_history_items
+        ),
+        co_visitation_neighbors_per_item=(
+            None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        tuning_slug=(
+            f"tune_first_{args.max_target_customers}_customers"
+            if args.max_target_customers is not None
+            else None
+        ),
+    )
+    output_path = _resolve_path_under_root(paths, output_path)
+    validation_report_path = args.validation_report_path or paths.submission_validation_report_path(
+        output_path
+    )
+    validation_report_path = _resolve_path_under_root(paths, validation_report_path)
+    report_path = args.report_path or paths.deterministic_ranker_submission_report_path(output_path)
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    target_customer_ids = load_submission_customer_ids_in_order(paths.raw_data_dir)
+    submission_customer_set = set(target_customer_ids)
+    print(
+        "Selecting deterministic weights on latest visible label window: "
+        f"{tuning_split.cutoff.isoformat()}..{tuning_split.validation_end.isoformat()} exclusive",
+        flush=True,
+    )
+    train_candidate_summary_path = _write_cached_ranker_candidate_export(
+        cache={},
+        paths=paths,
+        split=tuning_split,
+        submission_customer_ids=submission_customer_set,
+        output_path=train_candidate_path,
+        args=args,
+    )
+    train_labels = _validation_labels_for_split(
+        raw_data_dir=paths.raw_data_dir,
+        split=tuning_split,
+        submission_customer_ids=submission_customer_set,
+        max_target_customers=None,
+    )
+    weight_selection = select_deterministic_ranker_weights_from_csv(
+        candidate_path=train_candidate_path,
+        validation_labels=train_labels,
+        k=args.k,
+        top_n=args.top_trials,
+    )
+
+    print(
+        "Generating final-data deterministic-ranker predictions for "
+        f"{len(target_customer_ids)} customers. include_co_visitation={not args.no_co_visitation}, "
+        f"include_age_segment={args.include_age_segment_popularity}, "
+        f"include_garment_group={args.include_garment_group_popularity}",
+        flush=True,
+    )
+    customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
+    article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    submission = build_deterministic_ranker_submission_predictions(
+        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        split=final_split,
+        target_customer_ids=target_customer_ids,
+        weights=weight_selection.selected_weights,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        popularity_lookback_days=args.popularity_lookback_days,
+        include_co_visitation=not args.no_co_visitation,
+        co_visitation_max_history_items=args.co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        customer_segment_by_id=customer_age_segments,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=_age_segment_popularity_lookback_days(args),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        article_garment_group_by_id=article_garment_groups,
+        garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
+        garment_group_max_history_items=args.garment_group_max_history_items,
+        max_transaction_date=max_transaction_date,
+        transaction_progress_interval=5_000_000,
+        transaction_progress_callback=lambda phase, rows: print(
+            f"{phase} transaction scan progress: {rows} rows",
+            flush=True,
+        ),
+        status_callback=lambda message: print(f"Final source build: {message}", flush=True),
+        progress_interval=100_000,
+        progress_callback=lambda completed, total: print(
+            f"Final scoring progress: {completed}/{total} customers",
+            flush=True,
+        ),
+    )
+    written_submission_path = write_submission_file(
+        predictions_by_customer=submission.predictions,
+        customer_ids=target_customer_ids,
+        path=output_path,
+        max_predictions=args.k,
+    )
+    validation_result = validate_submission_file(
+        submission_path=written_submission_path,
+        expected_customer_ids=submission_customer_set,
+        valid_article_ids=load_article_ids(paths.raw_data_dir),
+        max_predictions=args.k,
+        require_full_length=True,
+    )
+    written_validation_report_path = write_submission_validation_report(
+        validation_result,
+        validation_report_path,
+    )
+    report = build_deterministic_ranker_submission_report(
+        tuning_split=tuning_split,
+        final_split=final_split,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        popularity_lookback_days=args.popularity_lookback_days,
+        include_co_visitation=not args.no_co_visitation,
+        co_visitation_max_history_items=args.co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=(
+            args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        weight_selection=weight_selection,
+        submission=submission,
+        submission_path=written_submission_path,
+        validation_report_path=written_validation_report_path,
+        validation=validation_result,
+    )
+    written_report_path = write_deterministic_ranker_submission_report(report, report_path)
+
+    print(f"Max transaction date: {max_transaction_date.isoformat()}")
+    print(f"Final training cutoff: {final_split.cutoff.isoformat()}")
+    print(f"Tuning pairs: {weight_selection.selected_metrics.unique_candidate_pairs}")
+    print(f"Tuning default MAP@{args.k}: {weight_selection.default_metrics.map_at_k:.8f}")
+    print(f"Tuning selected MAP@{args.k}: {weight_selection.selected_metrics.map_at_k:.8f}")
+    print(f"Prediction target customers: {submission.diagnostics.target_customers}")
+    print(
+        "Full-length prediction coverage: "
+        f"{submission.diagnostics.customers_with_full_length_predictions}/"
+        f"{submission.diagnostics.target_customers}"
+    )
+    print(f"Duplicate prediction rows: {submission.diagnostics.duplicate_prediction_rows}")
+    print(f"Train candidate summary: {train_candidate_summary_path}")
+    print(f"Submission written to: {written_submission_path}")
+    print(f"Submission valid: {validation_result.valid}")
+    print(f"Validation report written to: {written_validation_report_path}")
+    print(f"Deterministic-ranker submission report written to: {written_report_path}")
     for failure in validation_result.failures:
         print(f"- {failure}")
     return 0 if validation_result.valid else 1
