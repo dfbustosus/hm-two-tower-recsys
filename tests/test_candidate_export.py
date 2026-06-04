@@ -17,6 +17,7 @@ from hm_recsys.retrieval.candidate_export import (
     write_validation_candidate_export,
 )
 from hm_recsys.retrieval.source_names import (
+    AGE_SEGMENT_POPULARITY_SOURCE,
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
@@ -127,6 +128,41 @@ def test_validation_candidate_export_can_include_cached_content_similarity(
     } == {CONTENT_SIMILAR_ARTICLE}
 
 
+def test_validation_candidate_export_can_include_age_segment_popularity(
+    tmp_path: Path,
+) -> None:
+    split = TemporalSplit.from_isoformat("2020-01-08")
+    segment_article = "0000000005"
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 2), SECOND_CUSTOMER_ID, segment_article),
+        TransactionEvent(date(2020, 1, 8), CUSTOMER_ID, segment_article),
+    ]
+    output_path = tmp_path / "segment_candidates.csv"
+
+    summary = write_validation_candidate_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=split,
+        submission_customer_ids=(CUSTOMER_ID,),
+        output_path=output_path,
+        k=2,
+        include_co_visitation=False,
+        include_age_segment_popularity=True,
+        customer_segment_by_id={CUSTOMER_ID: "age_30_39", SECOND_CUSTOMER_ID: "age_30_39"},
+        age_segment_bucket_size=10,
+        age_segment_popularity_lookback_days=7,
+    )
+
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8", newline="")))
+    segment_rows = [row for row in rows if row["source"] == AGE_SEGMENT_POPULARITY_SOURCE]
+    assert summary.include_age_segment_popularity is True
+    assert summary.age_segment_bucket_size == 10
+    assert summary.age_segment_popularity_lookback_days == 7
+    assert summary.source_row_counts[AGE_SEGMENT_POPULARITY_SOURCE] == 2
+    assert segment_rows[0]["article_id"] == ARTICLE_1
+    assert {row["article_id"] for row in segment_rows} == {ARTICLE_1, segment_article}
+
+
 def test_candidate_export_supports_deterministic_smoke_cap(tmp_path: Path) -> None:
     split = TemporalSplit.from_isoformat("2020-01-08")
     events = [
@@ -165,6 +201,14 @@ def test_candidate_export_rejects_invalid_limits(tmp_path: Path) -> None:
             submission_customer_ids=(),
             output_path=tmp_path / "invalid.csv",
             k=0,
+        )
+    with pytest.raises(ValueError, match="customer_segment_by_id"):
+        write_validation_candidate_export(
+            transaction_iter_factory=lambda: iter(()),
+            split=split,
+            submission_customer_ids=(),
+            output_path=tmp_path / "invalid_segment.csv",
+            include_age_segment_popularity=True,
         )
 
 
