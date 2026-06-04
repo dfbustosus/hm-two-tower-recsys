@@ -37,6 +37,19 @@ ROLLING_RANKER_NO_CO_VISITATION ?=
 TWO_TOWER_NEGATIVES_PER_POSITIVE ?= 1
 TWO_TOWER_SEED ?= 42
 TWO_TOWER_MAX_POSITIVE_EXAMPLES ?= 100000
+TWO_TOWER_POSITIVE_SELECTION ?= latest
+TWO_TOWER_EMBEDDING_DIM ?= 16
+TWO_TOWER_EPOCHS ?= 3
+TWO_TOWER_LEARNING_RATE ?= 0.05
+TWO_TOWER_L2 ?= 0.0
+TWO_TOWER_LOSS ?= logistic
+TWO_TOWER_POSITIVE_RECENCY_HALF_LIFE_DAYS ?=
+TWO_TOWER_MAX_TRAINING_EXAMPLES ?=
+TWO_TOWER_MAX_EVAL_CUSTOMERS ?= 1000
+TWO_TOWER_MAX_RETRIEVAL_ARTICLES ?= 5000
+TWO_TOWER_EVALUATION_KS ?= 12 50 100
+TWO_TOWER_POPULARITY_PRIOR_WEIGHT ?=
+TWO_TOWER_POPULARITY_PRIOR_LOOKBACK_DAYS ?= 7
 ARTICLE_CONTENT_OUTPUT ?=
 ARTICLE_CONTENT_REPORT ?=
 ARTICLE_CONTENT_MAX_ARTICLES ?=
@@ -67,7 +80,7 @@ DETERMINISTIC_TUNING_TOP_TRIALS ?= 10
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export kaggle-submit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export two-tower-retrieval-smoke kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -106,6 +119,7 @@ help:
 	@printf "  make deterministic-ranker-submission  Generate tuned deterministic CSV\n\n"
 	@printf "  make learned-ranker-submission  Generate validated learned-ranker CSV\n\n"
 	@printf "  make two-tower-example-export CUTOFF=YYYY-MM-DD  Export two-tower examples\n\n"
+	@printf "  make two-tower-retrieval-smoke CUTOFF=YYYY-MM-DD  Train/evaluate two-tower smoke\n\n"
 	@printf "Maintenance:\n"
 	@printf "  make format        Auto-format Python files when present\n"
 	@printf "  make clean         Remove local caches, not data or the virtualenv\n"
@@ -393,7 +407,35 @@ two-tower-example-export: venv
 	if [[ -n "$(TWO_TOWER_MAX_POSITIVE_EXAMPLES)" ]]; then \
 		extra_args="$$extra_args --max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES)"; \
 	fi; \
-	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" $$extra_args
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" $$extra_args
+
+two-tower-retrieval-smoke: venv
+	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make two-tower-retrieval-smoke CUTOFF=2020-09-16\n"; exit 2; fi
+	@export_args=""; eval_args=""; \
+	if [[ -n "$(TWO_TOWER_MAX_POSITIVE_EXAMPLES)" ]]; then \
+		export_args="$$export_args --max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES)"; \
+		eval_args="$$eval_args --max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_MAX_TRAINING_EXAMPLES)" ]]; then \
+		eval_args="$$eval_args --max-training-examples $(TWO_TOWER_MAX_TRAINING_EXAMPLES)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_POSITIVE_RECENCY_HALF_LIFE_DAYS)" ]]; then \
+		eval_args="$$eval_args --positive-recency-half-life-days $(TWO_TOWER_POSITIVE_RECENCY_HALF_LIFE_DAYS)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_MAX_EVAL_CUSTOMERS)" ]]; then \
+		eval_args="$$eval_args --max-eval-customers $(TWO_TOWER_MAX_EVAL_CUSTOMERS)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)" ]]; then \
+		eval_args="$$eval_args --max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_EVALUATION_KS)" ]]; then \
+		eval_args="$$eval_args --evaluation-ks $(TWO_TOWER_EVALUATION_KS)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_POPULARITY_PRIOR_WEIGHT)" ]]; then \
+		eval_args="$$eval_args --popularity-prior-weight $(TWO_TOWER_POPULARITY_PRIOR_WEIGHT) --popularity-prior-lookback-days $(TWO_TOWER_POPULARITY_PRIOR_LOOKBACK_DAYS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" $$export_args; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-two-tower-retrieval --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" --embedding-dim "$(TWO_TOWER_EMBEDDING_DIM)" --epochs "$(TWO_TOWER_EPOCHS)" --learning-rate "$(TWO_TOWER_LEARNING_RATE)" --l2 "$(TWO_TOWER_L2)" --loss "$(TWO_TOWER_LOSS)" $$eval_args
 
 kaggle-submit: venv
 	@if [[ -z "$(SUBMISSION)" ]]; then printf "SUBMISSION is required, e.g. make kaggle-submit SUBMISSION=submissions/file.csv\n"; exit 2; fi
