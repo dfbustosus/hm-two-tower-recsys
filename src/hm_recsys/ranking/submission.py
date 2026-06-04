@@ -14,7 +14,12 @@ from typing import Any
 from hm_recsys.data.io import TransactionEvent
 from hm_recsys.evaluation.submission import SubmissionValidationResult
 from hm_recsys.evaluation.temporal import TemporalSplit
-from hm_recsys.ranking.deterministic import aggregate_candidate_features
+from hm_recsys.ranking.deterministic import (
+    DeterministicRankerWeights,
+    aggregate_candidate_features,
+    rank_candidates_by_customer,
+)
+from hm_recsys.ranking.deterministic_tuning import DeterministicRankerWeightSelection
 from hm_recsys.ranking.linear import (
     LinearRankerConfig,
     LinearRankerModel,
@@ -30,6 +35,14 @@ from hm_recsys.retrieval.co_visitation import (
     DEFAULT_MAX_HISTORY_ITEMS,
     DEFAULT_MAX_NEIGHBORS_PER_ITEM,
     build_co_visitation_index,
+)
+from hm_recsys.retrieval.metadata_affinity import (
+    GARMENT_GROUP_COLUMN,
+    build_article_attribute_popularity_index,
+)
+from hm_recsys.retrieval.segment_popularity import (
+    DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+    build_age_segment_popularity_index,
 )
 
 
@@ -118,6 +131,79 @@ class LearnedLinearRankerSubmissionReport:
     config: LinearRankerConfig
     model: LinearRankerModel
     training: LinearRankerTrainingSummary
+    submission: LinearRankerSubmissionDiagnostics
+    submission_path: str
+    validation_report_path: str
+    validation: SubmissionValidationResult
+
+
+@dataclass(frozen=True)
+class DeterministicRankerSubmissionPredictions:
+    """Final-data predictions produced by deterministic ranker weights.
+
+    Attributes mirror ``LinearRankerSubmissionPredictions`` but store the explicit
+    deterministic weights used for scoring.
+    """
+
+    predictions: dict[str, tuple[str, ...]]
+    final_training_cutoff: str
+    max_transaction_date: str | None
+    runtime_seconds: float
+    weights: DeterministicRankerWeights
+    diagnostics: LinearRankerSubmissionDiagnostics
+
+
+@dataclass(frozen=True)
+class DeterministicRankerSubmissionReport:
+    """Experiment report for a tuned deterministic-ranker submission.
+
+    Attributes:
+        generated_at_utc: UTC timestamp for the report.
+        tuning_cutoff: Cutoff date for the label window used to select weights.
+        tuning_validation_end_exclusive: Exclusive end of the tuning label window.
+        final_training_cutoff: Exclusive cutoff used for final-data candidate features.
+        max_transaction_date: Latest observed transaction date from the raw training file.
+        horizon_days: Label horizon used for the tuning window.
+        k: Recommendation depth and submission row length.
+        candidate_k: Maximum candidates per source.
+        popularity_lookback_days: Recent popularity lookback length.
+        include_co_visitation: Whether co-visitation source rows were used.
+        co_visitation_max_history_items: Co-visitation customer-history length.
+        co_visitation_max_neighbors_per_item: Co-visitation neighbor cap per item.
+        include_age_segment_popularity: Whether age-segment source rows were used.
+        age_segment_bucket_size: Age bucket width when age source is enabled.
+        age_segment_popularity_lookback_days: Age-segment source lookback.
+        include_garment_group_popularity: Whether garment-group source rows were used.
+        garment_group_popularity_lookback_days: Garment-group source lookback.
+        garment_group_max_history_items: History length used for garment affinities.
+        weight_selection: Leakage-safe tuning-window weight selection diagnostics.
+        weights: Selected deterministic weights used for final scoring.
+        submission: Final prediction diagnostics.
+        submission_path: Generated CSV path under ``submissions/``.
+        validation_report_path: Submission-validation JSON report path.
+        validation: Submission-validation result.
+    """
+
+    generated_at_utc: str
+    tuning_cutoff: str
+    tuning_validation_end_exclusive: str
+    final_training_cutoff: str
+    max_transaction_date: str | None
+    horizon_days: int
+    k: int
+    candidate_k: int
+    popularity_lookback_days: int
+    include_co_visitation: bool
+    co_visitation_max_history_items: int
+    co_visitation_max_neighbors_per_item: int
+    include_age_segment_popularity: bool
+    age_segment_bucket_size: int | None
+    age_segment_popularity_lookback_days: int | None
+    include_garment_group_popularity: bool
+    garment_group_popularity_lookback_days: int | None
+    garment_group_max_history_items: int | None
+    weight_selection: DeterministicRankerWeightSelection
+    weights: DeterministicRankerWeights
     submission: LinearRankerSubmissionDiagnostics
     submission_path: str
     validation_report_path: str
@@ -278,6 +364,194 @@ def build_linear_ranker_submission_predictions(
     )
 
 
+def build_deterministic_ranker_submission_predictions(
+    transaction_iter_factory: Callable[[], Iterable[TransactionEvent]],
+    split: TemporalSplit,
+    target_customer_ids: Iterable[str],
+    weights: DeterministicRankerWeights,
+    k: int = 12,
+    candidate_k: int = 12,
+    popularity_lookback_days: int = 7,
+    include_co_visitation: bool = True,
+    co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    include_age_segment_popularity: bool = False,
+    customer_segment_by_id: dict[str, str] | None = None,
+    age_segment_bucket_size: int = DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+    age_segment_popularity_lookback_days: int | None = None,
+    include_garment_group_popularity: bool = False,
+    article_garment_group_by_id: dict[str, str] | None = None,
+    garment_group_popularity_lookback_days: int | None = None,
+    garment_group_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    max_transaction_date: date | None = None,
+    transaction_progress_interval: int | None = None,
+    transaction_progress_callback: Callable[[str, int], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
+    progress_interval: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> DeterministicRankerSubmissionPredictions:
+    """Generate final-data predictions with explicit deterministic ranker weights.
+
+    Args mirror ``build_linear_ranker_submission_predictions`` with optional
+    age-segment and garment-group candidate sources added for the deterministic
+    champion path.
+
+    Raises:
+        ValueError: If numeric limits or required metadata mappings are invalid.
+    """
+
+    if k <= 0:
+        raise ValueError("k must be positive")
+    if candidate_k <= 0:
+        raise ValueError("candidate_k must be positive")
+    if popularity_lookback_days <= 0:
+        raise ValueError("popularity_lookback_days must be positive")
+    if transaction_progress_interval is not None and transaction_progress_interval <= 0:
+        raise ValueError("transaction_progress_interval must be positive when provided")
+    if progress_interval is not None and progress_interval <= 0:
+        raise ValueError("progress_interval must be positive when provided")
+    if include_age_segment_popularity and customer_segment_by_id is None:
+        raise ValueError("customer_segment_by_id is required for age-segment popularity")
+    if age_segment_bucket_size <= 0:
+        raise ValueError("age_segment_bucket_size must be positive")
+    resolved_age_segment_lookback_days = (
+        age_segment_popularity_lookback_days
+        if age_segment_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_age_segment_lookback_days <= 0:
+        raise ValueError("age_segment_popularity_lookback_days must be positive")
+    if include_garment_group_popularity and article_garment_group_by_id is None:
+        raise ValueError("article_garment_group_by_id is required for garment-group popularity")
+    if garment_group_max_history_items <= 0:
+        raise ValueError("garment_group_max_history_items must be positive")
+    resolved_garment_group_lookback_days = (
+        garment_group_popularity_lookback_days
+        if garment_group_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_garment_group_lookback_days <= 0:
+        raise ValueError("garment_group_popularity_lookback_days must be positive")
+
+    started_at = perf_counter()
+    target_customer_tuple = tuple(target_customer_ids)
+    if status_callback is not None:
+        status_callback("building repeat/popularity candidate sources")
+    baseline_sources = build_repeat_popularity_candidate_sources(
+        transactions=transaction_iter_factory(),
+        split=split,
+        target_customer_ids=target_customer_tuple,
+        k=candidate_k,
+        popularity_lookback_days=popularity_lookback_days,
+        progress_interval=transaction_progress_interval,
+        progress_callback=(
+            None
+            if transaction_progress_callback is None
+            else lambda rows: transaction_progress_callback("repeat_popularity", rows)
+        ),
+    )
+    if status_callback is not None:
+        status_callback("repeat/popularity candidate sources ready")
+        if include_co_visitation:
+            status_callback("building co-visitation index")
+    co_visitation_index = (
+        build_co_visitation_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            max_history_items=co_visitation_max_history_items,
+            max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+            progress_interval=transaction_progress_interval,
+            progress_callback=(
+                None
+                if transaction_progress_callback is None
+                else lambda rows: transaction_progress_callback("co_visitation", rows)
+            ),
+            status_callback=status_callback,
+        )
+        if include_co_visitation
+        else None
+    )
+    if status_callback is not None and include_co_visitation:
+        status_callback("co-visitation index ready")
+    age_segment_index = (
+        build_age_segment_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            customer_segment_by_id=customer_segment_by_id or {},
+            lookback_days=resolved_age_segment_lookback_days,
+            max_articles_per_segment=candidate_k,
+        )
+        if include_age_segment_popularity
+        else None
+    )
+    garment_group_index = (
+        build_article_attribute_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            article_attribute_by_id=article_garment_group_by_id or {},
+            attribute_name=GARMENT_GROUP_COLUMN,
+            lookback_days=resolved_garment_group_lookback_days,
+            max_history_items=garment_group_max_history_items,
+            max_articles_per_attribute=candidate_k,
+        )
+        if include_garment_group_popularity
+        else None
+    )
+    popularity_backfill = merge_ranked_sources(
+        (baseline_sources.recent_popularity, baseline_sources.all_time_popularity),
+        k=k,
+    )
+
+    predictions: dict[str, tuple[str, ...]] = {}
+    source_row_counts: Counter[str] = Counter()
+    unique_candidate_pairs = 0
+    total_customers = len(target_customer_tuple)
+    for customer_index, customer_id in enumerate(target_customer_tuple, start=1):
+        records = tuple(
+            iter_candidate_records_for_customer(
+                customer_id=customer_id,
+                repeat_recommendations=baseline_sources.repeat_recommendations,
+                recent_popularity=baseline_sources.recent_popularity,
+                all_time_popularity=baseline_sources.all_time_popularity,
+                co_visitation_index=co_visitation_index,
+                age_segment_index=age_segment_index,
+                garment_group_index=garment_group_index,
+                k=candidate_k,
+            )
+        )
+        source_row_counts.update(record.source for record in records)
+        unique_candidate_pairs += len({record.article_id for record in records})
+        features_by_customer = aggregate_candidate_features(records, validation_labels={})
+        ranked = rank_candidates_by_customer(features_by_customer, k=k, weights=weights).get(
+            customer_id,
+            (),
+        )
+        predictions[customer_id] = merge_ranked_sources((ranked, popularity_backfill), k=k)
+        if (
+            progress_callback is not None
+            and progress_interval is not None
+            and (customer_index % progress_interval == 0 or customer_index == total_customers)
+        ):
+            progress_callback(customer_index, total_customers)
+
+    diagnostics = build_linear_ranker_submission_diagnostics(
+        predictions=predictions,
+        k=k,
+        unique_candidate_pairs=unique_candidate_pairs,
+        source_row_counts=dict(sorted(source_row_counts.items())),
+    )
+    return DeterministicRankerSubmissionPredictions(
+        predictions=predictions,
+        final_training_cutoff=split.cutoff.isoformat(),
+        max_transaction_date=(max_transaction_date.isoformat() if max_transaction_date else None),
+        runtime_seconds=perf_counter() - started_at,
+        weights=weights,
+        diagnostics=diagnostics,
+    )
+
+
 def build_linear_ranker_submission_diagnostics(
     predictions: dict[str, tuple[str, ...]],
     k: int,
@@ -367,6 +641,57 @@ def build_learned_linear_ranker_submission_report(
     )
 
 
+def build_deterministic_ranker_submission_report(
+    tuning_split: TemporalSplit,
+    final_split: TemporalSplit,
+    k: int,
+    candidate_k: int,
+    popularity_lookback_days: int,
+    include_co_visitation: bool,
+    co_visitation_max_history_items: int,
+    co_visitation_max_neighbors_per_item: int,
+    include_age_segment_popularity: bool,
+    age_segment_bucket_size: int | None,
+    age_segment_popularity_lookback_days: int | None,
+    include_garment_group_popularity: bool,
+    garment_group_popularity_lookback_days: int | None,
+    garment_group_max_history_items: int | None,
+    weight_selection: DeterministicRankerWeightSelection,
+    submission: DeterministicRankerSubmissionPredictions,
+    submission_path: Path | str,
+    validation_report_path: Path | str,
+    validation: SubmissionValidationResult,
+) -> DeterministicRankerSubmissionReport:
+    """Build a reproducibility report for deterministic-ranker submission."""
+
+    return DeterministicRankerSubmissionReport(
+        generated_at_utc=datetime.now(UTC).isoformat(timespec="seconds"),
+        tuning_cutoff=tuning_split.cutoff.isoformat(),
+        tuning_validation_end_exclusive=tuning_split.validation_end.isoformat(),
+        final_training_cutoff=final_split.cutoff.isoformat(),
+        max_transaction_date=submission.max_transaction_date,
+        horizon_days=tuning_split.horizon_days,
+        k=k,
+        candidate_k=candidate_k,
+        popularity_lookback_days=popularity_lookback_days,
+        include_co_visitation=include_co_visitation,
+        co_visitation_max_history_items=co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+        include_age_segment_popularity=include_age_segment_popularity,
+        age_segment_bucket_size=age_segment_bucket_size,
+        age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
+        include_garment_group_popularity=include_garment_group_popularity,
+        garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
+        garment_group_max_history_items=garment_group_max_history_items,
+        weight_selection=weight_selection,
+        weights=submission.weights,
+        submission=submission.diagnostics,
+        submission_path=str(Path(submission_path).expanduser().resolve()),
+        validation_report_path=str(Path(validation_report_path).expanduser().resolve()),
+        validation=validation,
+    )
+
+
 def learned_linear_ranker_submission_report_to_dict(
     report: LearnedLinearRankerSubmissionReport,
 ) -> dict[str, Any]:
@@ -378,6 +703,14 @@ def learned_linear_ranker_submission_report_to_dict(
     Returns:
         Dictionary suitable for JSON serialization.
     """
+
+    return asdict(report)
+
+
+def deterministic_ranker_submission_report_to_dict(
+    report: DeterministicRankerSubmissionReport,
+) -> dict[str, Any]:
+    """Convert a deterministic-ranker submission report to serializable primitives."""
 
     return asdict(report)
 
@@ -401,6 +734,26 @@ def write_learned_linear_ranker_submission_report(
     report_path.write_text(
         json.dumps(
             learned_linear_ranker_submission_report_to_dict(report),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return report_path
+
+
+def write_deterministic_ranker_submission_report(
+    report: DeterministicRankerSubmissionReport,
+    path: Path | str,
+) -> Path:
+    """Write a deterministic-ranker submission report as JSON."""
+
+    report_path = Path(path).expanduser().resolve()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            deterministic_ranker_submission_report_to_dict(report),
             indent=2,
             sort_keys=True,
         )
