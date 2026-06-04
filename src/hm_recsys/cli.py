@@ -105,6 +105,14 @@ from hm_recsys.training.two_tower_export import (
     write_two_tower_example_export,
     write_two_tower_example_export_summary,
 )
+from hm_recsys.training.two_tower_retrieval import (
+    TwoTowerSmokeTrainingConfig,
+    build_article_popularity_score_prior,
+    build_two_tower_retrieval_report,
+    evaluate_two_tower_retrieval,
+    train_two_tower_smoke_model_from_csv,
+    write_two_tower_retrieval_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -654,6 +662,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("random",),
         help="Negative sampling strategy. Currently only random is implemented.",
     )
+    two_tower_export_parser.add_argument(
+        "--positive-selection",
+        default="first",
+        choices=("first", "latest"),
+        help="Positive-pair selection strategy when --max-positive-examples is set.",
+    )
     two_tower_export_parser.add_argument("--project-root", type=Path, default=None)
     two_tower_export_parser.add_argument("--raw-data-dir", type=Path, default=None)
     two_tower_export_parser.add_argument("--examples-path", type=Path, default=None)
@@ -661,6 +675,97 @@ def build_parser() -> argparse.ArgumentParser:
     two_tower_export_parser.add_argument("--article-mapping-path", type=Path, default=None)
     two_tower_export_parser.add_argument("--report-path", type=Path, default=None)
     two_tower_export_parser.set_defaults(handler=_handle_export_two_tower_examples)
+
+    two_tower_eval_parser = subparsers.add_parser(
+        "evaluate-two-tower-retrieval",
+        help="Train/evaluate the lightweight two-tower retrieval smoke model.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--cutoff",
+        required=True,
+        help="Validation cutoff date matching the exported example cutoff, YYYY-MM-DD.",
+    )
+    two_tower_eval_parser.add_argument("--horizon-days", type=int, default=7)
+    two_tower_eval_parser.add_argument("--negatives-per-positive", type=int, default=1)
+    two_tower_eval_parser.add_argument(
+        "--positive-selection",
+        default="first",
+        choices=("first", "latest"),
+        help="Positive-pair selection strategy used to infer default artifact paths.",
+    )
+    two_tower_eval_parser.add_argument("--seed", type=int, default=42)
+    two_tower_eval_parser.add_argument("--embedding-dim", type=int, default=16)
+    two_tower_eval_parser.add_argument("--epochs", type=int, default=3)
+    two_tower_eval_parser.add_argument("--learning-rate", type=float, default=0.05)
+    two_tower_eval_parser.add_argument("--l2", type=float, default=0.0)
+    two_tower_eval_parser.add_argument(
+        "--loss",
+        default="logistic",
+        choices=("logistic", "bpr"),
+        help="Two-tower training objective. Defaults to pointwise logistic.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--positive-recency-half-life-days",
+        type=float,
+        default=None,
+        help="Optional half-life for recency-weighting exported training examples.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--recency-reference-date",
+        default=None,
+        help="Optional ISO date for recency weighting. Defaults to the validation cutoff.",
+    )
+    two_tower_eval_parser.add_argument("--k", type=int, default=12)
+    two_tower_eval_parser.add_argument(
+        "--evaluation-ks",
+        type=int,
+        nargs="+",
+        default=[12, 50, 100],
+        help="Candidate-recall cutoffs. Defaults to 12 50 100.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--max-positive-examples",
+        type=int,
+        default=None,
+        help="Positive-example cap used to infer default exported artifact paths.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--max-training-examples",
+        type=int,
+        default=None,
+        help="Optional deterministic cap on example rows consumed by SGD.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--max-eval-customers",
+        type=int,
+        default=1000,
+        help="Optional deterministic cap for mapped validation customers.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--max-retrieval-articles",
+        type=int,
+        default=5000,
+        help="Optional top-popular article pool cap for exact retrieval.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--popularity-prior-weight",
+        type=float,
+        default=0.0,
+        help="Optional additive weight for a cutoff-safe recent-popularity score prior.",
+    )
+    two_tower_eval_parser.add_argument(
+        "--popularity-prior-lookback-days",
+        type=int,
+        default=7,
+        help="Pre-cutoff lookback window for the two-tower popularity score prior.",
+    )
+    two_tower_eval_parser.add_argument("--project-root", type=Path, default=None)
+    two_tower_eval_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    two_tower_eval_parser.add_argument("--examples-path", type=Path, default=None)
+    two_tower_eval_parser.add_argument("--customer-mapping-path", type=Path, default=None)
+    two_tower_eval_parser.add_argument("--article-mapping-path", type=Path, default=None)
+    two_tower_eval_parser.add_argument("--report-path", type=Path, default=None)
+    two_tower_eval_parser.set_defaults(handler=_handle_evaluate_two_tower_retrieval)
 
     image_inventory_parser = subparsers.add_parser(
         "inventory-article-images",
@@ -2591,6 +2696,7 @@ def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
         negatives_per_positive=args.negatives_per_positive,
         seed=args.seed,
         negative_sampling="random",
+        positive_selection=args.positive_selection,
         max_positive_examples=args.max_positive_examples,
     )
     examples_path = args.examples_path or paths.two_tower_examples_path(
@@ -2598,6 +2704,7 @@ def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
         negatives_per_positive=args.negatives_per_positive,
         seed=args.seed,
         max_positive_examples=args.max_positive_examples,
+        positive_selection=args.positive_selection,
     )
     examples_path = _resolve_path_under_root(paths, examples_path)
     customer_mapping_path = args.customer_mapping_path or paths.two_tower_customer_mapping_path(
@@ -2616,7 +2723,8 @@ def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
         f"cutoff={split.cutoff.isoformat()}, "
         f"negatives_per_positive={config.negatives_per_positive}, "
         f"seed={config.seed}, "
-        f"max_positive_examples={config.max_positive_examples}",
+        f"max_positive_examples={config.max_positive_examples}, "
+        f"positive_selection={config.positive_selection}",
         flush=True,
     )
     summary = write_two_tower_example_export(
@@ -2647,6 +2755,127 @@ def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
     print(f"Customer mapping written to: {summary.customer_mapping_path}")
     print(f"Article mapping written to: {summary.article_mapping_path}")
     print(f"Summary report written to: {written_report_path}")
+    return 0
+
+
+def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
+    """Handle the ``evaluate-two-tower-retrieval`` subcommand."""
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    examples_path = args.examples_path or paths.two_tower_examples_path(
+        cutoff=args.cutoff,
+        negatives_per_positive=args.negatives_per_positive,
+        seed=args.seed,
+        max_positive_examples=args.max_positive_examples,
+        positive_selection=args.positive_selection,
+    )
+    examples_path = _resolve_path_under_root(paths, examples_path)
+    customer_mapping_path = args.customer_mapping_path or paths.two_tower_customer_mapping_path(
+        examples_path
+    )
+    article_mapping_path = args.article_mapping_path or paths.two_tower_article_mapping_path(
+        examples_path
+    )
+    customer_mapping_path = _resolve_path_under_root(paths, customer_mapping_path)
+    article_mapping_path = _resolve_path_under_root(paths, article_mapping_path)
+    report_path = args.report_path or paths.two_tower_retrieval_report_path(
+        examples_path=examples_path,
+        embedding_dim=args.embedding_dim,
+        epochs=args.epochs,
+        k=args.k,
+        evaluation_ks=args.evaluation_ks,
+        loss=args.loss,
+        positive_recency_half_life_days=args.positive_recency_half_life_days,
+        popularity_prior_weight=args.popularity_prior_weight,
+        popularity_prior_lookback_days=(
+            args.popularity_prior_lookback_days if args.popularity_prior_weight > 0.0 else None
+        ),
+        max_eval_customers=args.max_eval_customers,
+        max_retrieval_articles=args.max_retrieval_articles,
+    )
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    recency_reference_date = args.recency_reference_date
+    if args.positive_recency_half_life_days is not None and recency_reference_date is None:
+        recency_reference_date = split.cutoff.isoformat()
+    config = TwoTowerSmokeTrainingConfig(
+        embedding_dim=args.embedding_dim,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        l2=args.l2,
+        seed=args.seed,
+        loss=args.loss,
+        max_training_examples=args.max_training_examples,
+        positive_recency_half_life_days=args.positive_recency_half_life_days,
+        recency_reference_date=recency_reference_date,
+    )
+    print(
+        "Training lightweight two-tower smoke model from exported examples: " f"{examples_path}",
+        flush=True,
+    )
+    model, training = train_two_tower_smoke_model_from_csv(
+        examples_path=examples_path,
+        customer_mapping_path=customer_mapping_path,
+        article_mapping_path=article_mapping_path,
+        config=config,
+    )
+    validation_data = summarize_temporal_split_with_labels(
+        iter_transaction_events(paths.raw_data_dir),
+        split,
+    )
+    submission_customer_ids = load_submission_customer_ids(paths.raw_data_dir)
+    validation_labels = {
+        customer_id: validation_data.validation_labels[customer_id]
+        for customer_id in select_validation_label_customer_ids(
+            validation_labels=validation_data.validation_labels,
+            submission_customer_ids=submission_customer_ids,
+            max_target_customers=None,
+        )
+    }
+    article_score_prior = (
+        build_article_popularity_score_prior(
+            iter_transaction_events(paths.raw_data_dir),
+            split,
+            lookback_days=args.popularity_prior_lookback_days,
+        )
+        if args.popularity_prior_weight > 0.0
+        else None
+    )
+    evaluation = evaluate_two_tower_retrieval(
+        model,
+        validation_labels,
+        k=args.k,
+        evaluation_ks=args.evaluation_ks,
+        max_eval_customers=args.max_eval_customers,
+        max_retrieval_articles=args.max_retrieval_articles,
+        article_score_prior=article_score_prior,
+        score_prior_weight=args.popularity_prior_weight,
+    )
+    report = build_two_tower_retrieval_report(
+        cutoff=split.cutoff.isoformat(),
+        validation_end_exclusive=split.validation_end.isoformat(),
+        horizon_days=split.horizon_days,
+        training=training,
+        evaluation=evaluation,
+    )
+    written_report_path = write_two_tower_retrieval_report(report, report_path)
+
+    print(f"Cutoff: {report.cutoff}")
+    print(f"Validation end exclusive: {report.validation_end_exclusive}")
+    print(f"Training rows read: {training.rows_read}")
+    print(f"Training positives: {training.positive_examples}")
+    print(f"Training negatives: {training.negative_examples}")
+    print(f"Mapped validation customers: {evaluation.mapped_labeled_customers}")
+    print(f"Evaluated customers: {evaluation.evaluated_customers}")
+    print(f"Article pool size: {evaluation.article_pool_size}")
+    print(f"Label article pool coverage: {evaluation.label_article_pool_coverage:.8f}")
+    print(f"Score prior weight: {evaluation.score_prior_weight:.8f}")
+    print(f"Score prior articles: {evaluation.score_prior_articles}")
+    print(f"Two-tower MAP@{evaluation.k}: {evaluation.map_at_k:.8f}")
+    for metric_k in evaluation.evaluation_ks:
+        print(f"Two-tower recall@{metric_k}: {evaluation.recall_by_k[str(metric_k)]:.8f}")
+    print(f"Retrieval report written to: {written_report_path}")
     return 0
 
 
