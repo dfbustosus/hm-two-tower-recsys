@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import random
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
@@ -31,6 +32,7 @@ TWO_TOWER_EXAMPLE_HEADER = (
 TWO_TOWER_CUSTOMER_MAPPING_HEADER = ("customer_index", "customer_id")
 TWO_TOWER_ARTICLE_MAPPING_HEADER = ("article_index", "article_id")
 TwoTowerExportNegativeSampling = Literal["random"]
+TwoTowerPositiveSelection = Literal["first", "latest"]
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,9 @@ class TwoTowerExampleExportConfig:
         negative_sampling: Negative sampling strategy. The initial export supports
             random negatives only; harder strategies can be added after this data
             contract is stable.
+        positive_selection: Strategy for capped positive exports. ``first`` keeps
+            the earliest unique pairs in transaction-file order; ``latest`` keeps
+            the most recently observed unique pairs before the cutoff.
         max_positive_examples: Optional deterministic cap for smoke exports. When
             provided, the first unique pre-cutoff positive pairs in transaction-file
             order are exported, while negatives still exclude all pre-cutoff positives
@@ -52,6 +57,7 @@ class TwoTowerExampleExportConfig:
     negatives_per_positive: int = 1
     seed: int = 42
     negative_sampling: TwoTowerExportNegativeSampling = "random"
+    positive_selection: TwoTowerPositiveSelection = "first"
     max_positive_examples: int | None = None
 
     def __post_init__(self) -> None:
@@ -67,6 +73,8 @@ class TwoTowerExampleExportConfig:
             raise ValueError("seed must be non-negative")
         if self.negative_sampling != "random":
             raise ValueError(f"unsupported negative_sampling: {self.negative_sampling!r}")
+        if self.positive_selection not in {"first", "latest"}:
+            raise ValueError(f"unsupported positive_selection: {self.positive_selection!r}")
         if self.max_positive_examples is not None and self.max_positive_examples <= 0:
             raise ValueError("max_positive_examples must be positive when provided")
 
@@ -97,6 +105,7 @@ class TwoTowerExampleExportSummary:
         negatives_per_positive: Requested negative rows per positive row.
         seed: Deterministic random seed.
         max_positive_examples: Optional positive-pair cap used for smoke exports.
+        positive_selection: Positive-pair selection strategy used when capped.
         mapping_sort: Stable sort policy used for customer/article mappings.
         train_rows_seen: Number of pre-cutoff transaction rows scanned.
         positive_pairs_selected: Number of unique positive pairs exported.
@@ -123,6 +132,7 @@ class TwoTowerExampleExportSummary:
     negatives_per_positive: int
     seed: int
     max_positive_examples: int | None
+    positive_selection: str
     mapping_sort: str
     train_rows_seen: int
     positive_pairs_selected: int
@@ -239,6 +249,7 @@ def write_two_tower_example_export(
         negatives_per_positive=export_config.negatives_per_positive,
         seed=export_config.seed,
         max_positive_examples=export_config.max_positive_examples,
+        positive_selection=export_config.positive_selection,
         mapping_sort="lexicographic_id",
         train_rows_seen=scan.train_rows_seen,
         positive_pairs_selected=len(scan.positive_pair_stats),
@@ -330,9 +341,12 @@ def _scan_pre_cutoff_transactions(
     scanned_rows = 0
     known_article_ids: set[str] = set()
     selected_customer_ids: set[str] = set()
-    positive_pair_stats: dict[tuple[str, str], PositivePairStats] = {}
+    positive_pair_stats: OrderedDict[tuple[str, str], PositivePairStats] = OrderedDict()
     customer_positive_items: dict[str, set[str]] = {}
     full_export = config.max_positive_examples is None
+    latest_capped_export = (
+        config.max_positive_examples is not None and config.positive_selection == "latest"
+    )
 
     for scanned_rows, transaction in enumerate(transactions, start=1):
         if transaction.t_dat >= split.cutoff:
@@ -346,12 +360,20 @@ def _scan_pre_cutoff_transactions(
         train_rows_seen += 1
         known_article_ids.add(transaction.article_id)
         key = (transaction.customer_id, transaction.article_id)
-        should_select = full_export or key in positive_pair_stats
-        if not should_select and len(positive_pair_stats) < (config.max_positive_examples or 0):
-            should_select = True
-        if should_select:
-            selected_customer_ids.add(transaction.customer_id)
-            _update_positive_pair_stats(positive_pair_stats, key, transaction.t_dat)
+        if latest_capped_export:
+            _update_latest_positive_pair_stats(
+                positive_pair_stats,
+                key,
+                transaction.t_dat,
+                max_positive_examples=config.max_positive_examples or 0,
+            )
+        else:
+            should_select = full_export or key in positive_pair_stats
+            if not should_select and len(positive_pair_stats) < (config.max_positive_examples or 0):
+                should_select = True
+            if should_select:
+                selected_customer_ids.add(transaction.customer_id)
+                _update_positive_pair_stats(positive_pair_stats, key, transaction.t_dat)
         if full_export:
             customer_positive_items.setdefault(transaction.customer_id, set()).add(
                 transaction.article_id
@@ -363,6 +385,9 @@ def _scan_pre_cutoff_transactions(
         progress_interval,
         progress_callback,
     )
+    if latest_capped_export:
+        selected_customer_ids = {customer_id for customer_id, _ in positive_pair_stats}
+
     return _PreCutoffScan(
         train_rows_seen=train_rows_seen,
         known_article_ids=known_article_ids,
@@ -418,6 +443,21 @@ def _update_positive_pair_stats(
         count=current.count + 1,
         last_seen=max(current.last_seen, seen_date),
     )
+
+
+def _update_latest_positive_pair_stats(
+    positive_pair_stats: OrderedDict[tuple[str, str], PositivePairStats],
+    key: tuple[str, str],
+    seen_date: date,
+    max_positive_examples: int,
+) -> None:
+    """Update bounded latest-positive state, keeping newest unique pairs."""
+
+    current = positive_pair_stats.pop(key, None)
+    count = (current.count + 1) if current is not None else 1
+    positive_pair_stats[key] = PositivePairStats(count=count, last_seen=seen_date)
+    while len(positive_pair_stats) > max_positive_examples:
+        positive_pair_stats.popitem(last=False)
 
 
 def _write_mapping(path: Path, header: tuple[str, str], ids: tuple[str, ...]) -> None:
