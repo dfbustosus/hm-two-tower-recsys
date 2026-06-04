@@ -18,6 +18,7 @@ from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER, Candid
 from hm_recsys.retrieval.source_names import (
     AGE_SEGMENT_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
+    GARMENT_GROUP_POPULARITY_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
@@ -36,6 +37,7 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, CO_VISITATION_SOURCE, 1, 3.0),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 3, 0.8),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, AGE_SEGMENT_POPULARITY_SOURCE, 2, 0.6),
+            CandidateRecord(CUSTOMER_ID, ARTICLE_2, GARMENT_GROUP_POPULARITY_SOURCE, 1, 0.9),
         ),
         validation_labels={CUSTOMER_ID: (ARTICLE_2,)},
     )
@@ -55,6 +57,8 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
     assert article_2.content_similarity_score == 0.8
     assert article_2.has_age_segment_popularity
     assert article_2.age_segment_popularity_score == 0.6
+    assert article_2.has_garment_group_popularity
+    assert article_2.garment_group_popularity_score == 0.9
 
 
 def test_deterministic_ranker_scoring_and_source_order_baseline() -> None:
