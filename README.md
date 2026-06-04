@@ -11,9 +11,10 @@ policy, CI, and the layered `src/` package layout are in place. Production
 components now cover H&M data-contract validation, safe string-ID CSV loading,
 temporal split summaries, MAP@12/recall metrics, submission validation,
 repeat-plus-popularity baselines, candidate-source diagnostics, co-visitation
-retrieval, ranker-ready candidate exports, deterministic ranking, learned linear
-ranking, rolling-window ranker validation, and learned-ranker submission
-generation. The first two-tower challenger foundation now exports cutoff-safe
+retrieval, age-segment and garment-group metadata popularity challengers,
+ranker-ready candidate exports, deterministic ranking, learned linear ranking,
+rolling-window ranker validation, and learned-ranker submission generation. The
+first two-tower challenger foundation now exports cutoff-safe
 training examples, stable ID mappings, and deterministic random negatives. The
 multimodal foundation now inventories local article images without loading image
 pixels so image/text retrieval sources can be added with measured coverage.
@@ -378,6 +379,23 @@ make learned-ranker-baseline \
 
 Treat this like every challenger: first validate on bounded smoke runs, then
 scale the customer cap, then run rolling validation before promotion.
+
+To test the garment-group affinity challenger, add recent articles popular in
+garment groups from each customer's pre-cutoff history. Garment groups come from
+`articles.csv`, IDs remain strings, and validation-window transactions are not
+used for the source counts or customer affinities:
+
+```bash
+make ranker-baseline \
+  CUTOFF=2020-09-16 \
+  RANKER_CANDIDATE_K=100 \
+  RANKER_MAX_TARGET_CUSTOMERS=1000 \
+  INCLUDE_GARMENT_GROUP_POPULARITY=1
+```
+
+Garment-group and age-segment sources can be combined for bounded ablations, but
+promotion still requires same-split and rolling MAP@12 gains over the existing
+candidate blend/ranker baselines.
 
 Train a leakage-safe learned linear ranker on the previous 7-day window and
 evaluate it on the requested validation cutoff:
