@@ -3,6 +3,8 @@
 REPEAT_SOURCE = "repeat"
 RECENT_POPULARITY_SOURCE = "recent_popularity"
 ALL_TIME_POPULARITY_SOURCE = "all_time_popularity"
+AGE_SEGMENT_POPULARITY_SOURCE = "age_segment_popularity"
+GARMENT_GROUP_POPULARITY_SOURCE = "garment_group_popularity"
 REPEAT_POPULARITY_BLEND_SOURCE = "repeat_popularity_blend"
 CO_VISITATION_SOURCE = "co_visitation"
 TEXT_SIMILARITY_SOURCE = "text_similarity"
