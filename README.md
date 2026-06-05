@@ -15,7 +15,8 @@ retrieval, age-segment and garment-group metadata popularity challengers,
 ranker-ready candidate exports, deterministic ranking, learned linear ranking,
 rolling-window ranker validation, and learned-ranker submission generation. The
 first two-tower challenger foundation now exports cutoff-safe
-training examples, stable ID mappings, and deterministic random negatives. The
+training examples, stable ID mappings, deterministic random negatives, and
+ranker-ready two-tower retrieval candidate rows for validation diagnostics. The
 multimodal foundation now inventories local article images without loading image
 pixels so image/text retrieval sources can be added with measured coverage.
 
@@ -415,6 +416,57 @@ The tuning grid and selected weights are written to an ignored JSON report under
 `artifacts/ranker-baselines/`. Treat the selected weights as a challenger until
 they improve rolling validation, not just one latest-week split.
 
+To include the two-tower retrieval challenger in deterministic ranker evaluation,
+first export cutoff-safe two-tower examples for the target cutoff, then enable
+the source when running the ranker. Two-tower rows are scored with their own
+ranker features, separate from generic content-similarity rows:
+
+```bash
+make two-tower-example-export CUTOFF=2020-09-16 \
+  TWO_TOWER_POSITIVE_SELECTION=latest \
+  TWO_TOWER_NEGATIVES_PER_POSITIVE=3 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=100000
+
+make ranker-baseline \
+  CUTOFF=2020-09-16 \
+  RANKER_CANDIDATE_K=50 \
+  INCLUDE_TWO_TOWER_RETRIEVAL=1 \
+  TWO_TOWER_POSITIVE_SELECTION=latest \
+  TWO_TOWER_NEGATIVES_PER_POSITIVE=3 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=100000 \
+  TWO_TOWER_EMBEDDING_DIM=32 \
+  TWO_TOWER_EPOCHS=80 \
+  TWO_TOWER_LOSS=bpr
+```
+
+For leakage-safe deterministic weight selection with the two-tower source,
+export examples for both the previous tuning cutoff and the evaluation cutoff,
+then run tuning with `INCLUDE_TWO_TOWER_RETRIEVAL=1`. The grid expands the
+two-tower presence and score weights only when this source is enabled:
+
+```bash
+make two-tower-example-export CUTOFF=2020-09-09 \
+  TWO_TOWER_POSITIVE_SELECTION=latest \
+  TWO_TOWER_NEGATIVES_PER_POSITIVE=3 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=100000
+
+make deterministic-ranker-tuning \
+  CUTOFF=2020-09-16 \
+  RANKER_CANDIDATE_K=50 \
+  INCLUDE_TWO_TOWER_RETRIEVAL=1 \
+  TWO_TOWER_POSITIVE_SELECTION=latest \
+  TWO_TOWER_NEGATIVES_PER_POSITIVE=3 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=100000 \
+  TWO_TOWER_EMBEDDING_DIM=32 \
+  TWO_TOWER_EPOCHS=80 \
+  TWO_TOWER_LOSS=bpr
+```
+
+For diagnostic fixed-weight ablations, `make ranker-baseline` also accepts
+`TWO_TOWER_RANKER_PRESENCE_WEIGHT` and `TWO_TOWER_RANKER_SCORE_WEIGHT`. Do not
+promote fixed weights selected on the evaluation window; use the previous-window
+tuning path above and then rolling validation.
+
 Generate and validate a full tuned deterministic-ranker submission after rolling
 validation supports the source/weight configuration:
 
@@ -571,6 +623,7 @@ trade ranking quality for broader mapping coverage.
 
 ## Next implementation gate
 
-The next code milestone is turning two-tower retrieval into a ranker-ready
-candidate source only if the smoke reports useful recall on leakage-safe temporal
-validation.
+The next code milestone is leakage-safe rolling validation for the ranker with
+the two-tower retrieval source enabled. Promote it only if candidate recall or
+downstream MAP@12 improves consistently over the current deterministic and
+learned-ranker baselines.
