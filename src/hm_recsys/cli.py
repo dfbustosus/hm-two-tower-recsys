@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
@@ -38,10 +39,14 @@ from hm_recsys.evaluation.temporal import (
 )
 from hm_recsys.infrastructure.paths import ProjectPaths
 from hm_recsys.ranking.deterministic import (
+    DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
+    DeterministicRankerWeights,
     evaluate_deterministic_ranker_from_csv,
     write_deterministic_ranker_report,
 )
 from hm_recsys.ranking.deterministic_tuning import (
+    DEFAULT_DETERMINISTIC_RANKER_TUNING_GRID,
+    DeterministicRankerTuningGrid,
     select_deterministic_ranker_weights_from_csv,
     tune_deterministic_ranker_from_csv,
     write_deterministic_ranker_tuning_report,
@@ -99,6 +104,7 @@ from hm_recsys.retrieval.segment_popularity import (
 from hm_recsys.retrieval.source_names import (
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
+    TWO_TOWER_RETRIEVAL_SOURCE,
 )
 from hm_recsys.training.two_tower_export import (
     TwoTowerExampleExportConfig,
@@ -106,6 +112,7 @@ from hm_recsys.training.two_tower_export import (
     write_two_tower_example_export_summary,
 )
 from hm_recsys.training.two_tower_retrieval import (
+    TwoTowerSmokeModel,
     TwoTowerSmokeTrainingConfig,
     build_article_popularity_score_prior,
     build_two_tower_retrieval_report,
@@ -296,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_age_segment_popularity_arguments(candidate_export_parser)
     _add_garment_group_popularity_arguments(candidate_export_parser)
     _add_content_similarity_candidate_arguments(candidate_export_parser)
+    _add_two_tower_candidate_arguments(candidate_export_parser)
     candidate_export_parser.add_argument("--project-root", type=Path, default=None)
     candidate_export_parser.add_argument("--raw-data-dir", type=Path, default=None)
     candidate_export_parser.add_argument("--output-path", type=Path, default=None)
@@ -345,6 +353,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_age_segment_popularity_arguments(ranker_parser)
     _add_garment_group_popularity_arguments(ranker_parser)
     _add_content_similarity_candidate_arguments(ranker_parser)
+    _add_two_tower_candidate_arguments(ranker_parser)
+    _add_two_tower_ranker_weight_arguments(ranker_parser)
     ranker_parser.add_argument("--project-root", type=Path, default=None)
     ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
     ranker_parser.add_argument("--candidate-output-path", type=Path, default=None)
@@ -406,6 +416,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_age_segment_popularity_arguments(tuned_ranker_parser)
     _add_garment_group_popularity_arguments(tuned_ranker_parser)
     _add_content_similarity_candidate_arguments(tuned_ranker_parser)
+    _add_two_tower_candidate_arguments(tuned_ranker_parser)
+    _add_two_tower_ranker_weight_arguments(tuned_ranker_parser)
     tuned_ranker_parser.add_argument("--project-root", type=Path, default=None)
     tuned_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
     tuned_ranker_parser.add_argument("--train-candidate-output-path", type=Path, default=None)
@@ -965,6 +977,60 @@ def _add_content_similarity_candidate_arguments(parser: argparse.ArgumentParser)
     )
 
 
+def _add_two_tower_candidate_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional trained two-tower candidate-source arguments."""
+
+    parser.add_argument(
+        "--include-two-tower-retrieval",
+        action="store_true",
+        help="Train the lightweight two-tower model and append two-tower candidate rows.",
+    )
+    parser.add_argument(
+        "--two-tower-source-name",
+        default=TWO_TOWER_RETRIEVAL_SOURCE,
+        help="Source name emitted for two-tower retrieval candidate rows.",
+    )
+    parser.add_argument("--two-tower-examples-path", type=Path, default=None)
+    parser.add_argument("--two-tower-customer-mapping-path", type=Path, default=None)
+    parser.add_argument("--two-tower-article-mapping-path", type=Path, default=None)
+    parser.add_argument("--two-tower-negatives-per-positive", type=int, default=1)
+    parser.add_argument("--two-tower-seed", type=int, default=42)
+    parser.add_argument(
+        "--two-tower-positive-selection",
+        default="latest",
+        choices=("first", "latest", "latest_customer"),
+    )
+    parser.add_argument("--two-tower-max-positive-examples", type=int, default=100000)
+    parser.add_argument("--two-tower-embedding-dim", type=int, default=32)
+    parser.add_argument("--two-tower-epochs", type=int, default=80)
+    parser.add_argument("--two-tower-learning-rate", type=float, default=0.05)
+    parser.add_argument("--two-tower-l2", type=float, default=0.0)
+    parser.add_argument(
+        "--two-tower-loss",
+        default="bpr",
+        choices=("logistic", "bpr"),
+    )
+    parser.add_argument("--two-tower-max-training-examples", type=int, default=None)
+    parser.add_argument("--two-tower-max-retrieval-articles", type=int, default=5000)
+
+
+def _add_two_tower_ranker_weight_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional deterministic ranker weights for two-tower rows."""
+
+    parser.add_argument(
+        "--two-tower-ranker-presence-weight",
+        type=float,
+        default=None,
+        help="Optional deterministic ranker additive weight for two-tower rows.",
+    )
+    parser.add_argument(
+        "--two-tower-ranker-score-weight",
+        type=float,
+        default=None,
+        help="Optional deterministic ranker score weight for two-tower rows.",
+    )
+
+
 def _add_age_segment_popularity_arguments(parser: argparse.ArgumentParser) -> None:
     """Add optional age-segment popularity candidate-source arguments."""
 
@@ -1344,6 +1410,8 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
             if args.content_similarity_manifest_path is not None
             else None
         ),
+        include_two_tower_retrieval=args.include_two_tower_retrieval,
+        two_tower_config_slug=_two_tower_config_slug(args),
         max_target_customers=args.max_target_customers,
     )
     output_path = _resolve_path_under_root(paths, output_path)
@@ -1352,6 +1420,7 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
     content_manifest_path = _resolve_optional_path_under_root(
         paths, args.content_similarity_manifest_path
     )
+    two_tower_model = _train_two_tower_candidate_model_if_enabled(paths, split, args)
 
     summary = write_validation_candidate_export(
         transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
@@ -1382,6 +1451,9 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
             args.content_similarity_popularity_lookback_days
         ),
         content_similarity_candidate_pool_size=args.content_similarity_candidate_pool_size,
+        two_tower_model=two_tower_model,
+        two_tower_source_name=args.two_tower_source_name,
+        two_tower_max_retrieval_articles=args.two_tower_max_retrieval_articles,
         max_target_customers=args.max_target_customers,
     )
     written_report_path = write_candidate_export_summary(summary, report_path)
@@ -1412,6 +1484,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
     content_source_name = _effective_content_similarity_source_name(args)
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    ranker_weights = _deterministic_ranker_weights_from_args(args)
     candidate_output_path = args.candidate_output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
         k=args.candidate_k,
@@ -1457,6 +1530,8 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
             if args.content_similarity_manifest_path is not None
             else None
         ),
+        include_two_tower_retrieval=args.include_two_tower_retrieval,
+        two_tower_config_slug=_two_tower_config_slug(args),
         max_target_customers=args.max_target_customers,
     )
     candidate_output_path = _resolve_path_under_root(paths, candidate_output_path)
@@ -1467,6 +1542,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
     content_manifest_path = _resolve_optional_path_under_root(
         paths, args.content_similarity_manifest_path
     )
+    two_tower_model = _train_two_tower_candidate_model_if_enabled(paths, split, args)
     ranker_report_path = args.report_path or paths.ranker_baseline_report_path(
         cutoff=args.cutoff,
         k=args.k,
@@ -1514,6 +1590,8 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
             if args.content_similarity_manifest_path is not None
             else None
         ),
+        include_two_tower_retrieval=args.include_two_tower_retrieval,
+        two_tower_config_slug=_two_tower_config_slug(args),
     )
     ranker_report_path = _resolve_path_under_root(paths, ranker_report_path)
 
@@ -1547,6 +1625,9 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
             args.content_similarity_popularity_lookback_days
         ),
         content_similarity_candidate_pool_size=args.content_similarity_candidate_pool_size,
+        two_tower_model=two_tower_model,
+        two_tower_source_name=args.two_tower_source_name,
+        two_tower_max_retrieval_articles=args.two_tower_max_retrieval_articles,
         max_target_customers=args.max_target_customers,
     )
     written_candidate_report_path = write_candidate_export_summary(
@@ -1570,6 +1651,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         validation_labels=validation_labels,
         split=split,
         k=args.k,
+        weights=ranker_weights,
     )
     written_ranker_report_path = write_deterministic_ranker_report(
         ranker_report, ranker_report_path
@@ -1668,6 +1750,8 @@ def _handle_tune_deterministic_ranker(args: argparse.Namespace) -> int:
             if args.content_similarity_manifest_path is not None
             else None
         ),
+        include_two_tower_retrieval=args.include_two_tower_retrieval,
+        two_tower_config_slug=_two_tower_config_slug(args),
     )
     report_path = _resolve_path_under_root(paths, report_path)
 
@@ -1710,6 +1794,8 @@ def _handle_tune_deterministic_ranker(args: argparse.Namespace) -> int:
         evaluation_split=evaluation_split,
         k=args.k,
         candidate_k=args.candidate_k,
+        grid=_deterministic_tuning_grid_from_args(args),
+        default_weights=_deterministic_ranker_weights_from_args(args),
         top_n=args.top_trials,
     )
     written_report_path = write_deterministic_ranker_tuning_report(report, report_path)
@@ -3181,6 +3267,116 @@ def _resolve_optional_path_under_root(paths: ProjectPaths, path: Path | None) ->
     return _resolve_path_under_root(paths, path)
 
 
+def _deterministic_ranker_weights_from_args(
+    args: argparse.Namespace,
+) -> DeterministicRankerWeights:
+    """Return deterministic-ranker weights with optional CLI overrides applied."""
+
+    updates: dict[str, float] = {}
+    two_tower_presence_weight = getattr(args, "two_tower_ranker_presence_weight", None)
+    if two_tower_presence_weight is not None:
+        updates["two_tower_retrieval_presence_weight"] = two_tower_presence_weight
+    two_tower_score_weight = getattr(args, "two_tower_ranker_score_weight", None)
+    if two_tower_score_weight is not None:
+        updates["two_tower_retrieval_score_weight"] = two_tower_score_weight
+    if not updates:
+        return DEFAULT_DETERMINISTIC_RANKER_WEIGHTS
+    return replace(DEFAULT_DETERMINISTIC_RANKER_WEIGHTS, **updates)
+
+
+def _deterministic_tuning_grid_from_args(
+    args: argparse.Namespace,
+) -> DeterministicRankerTuningGrid:
+    """Return the deterministic tuning grid for the configured source set.
+
+    The default tuning grid stays compact for classic popularity/co-visitation
+    experiments. When two-tower candidate rows are explicitly enabled, expand
+    only the two-tower-specific ranker weights so selection still happens on the
+    previous non-overlapping label window rather than on the evaluation window.
+    """
+
+    if not getattr(args, "include_two_tower_retrieval", False):
+        return DEFAULT_DETERMINISTIC_RANKER_TUNING_GRID
+    return replace(
+        DEFAULT_DETERMINISTIC_RANKER_TUNING_GRID,
+        two_tower_retrieval_presence_weights=(0.10, 0.30, 0.60, 1.00),
+        two_tower_retrieval_score_weights=(0.05, 0.15, 0.30),
+    )
+
+
+def _train_two_tower_candidate_model_if_enabled(
+    paths: ProjectPaths,
+    split: TemporalSplit,
+    args: argparse.Namespace,
+) -> TwoTowerSmokeModel | None:
+    """Train the configured two-tower candidate model when requested."""
+
+    if not getattr(args, "include_two_tower_retrieval", False):
+        return None
+
+    examples_path = getattr(args, "two_tower_examples_path", None) or paths.two_tower_examples_path(
+        cutoff=split.cutoff.isoformat(),
+        negatives_per_positive=args.two_tower_negatives_per_positive,
+        seed=args.two_tower_seed,
+        max_positive_examples=args.two_tower_max_positive_examples,
+        positive_selection=args.two_tower_positive_selection,
+    )
+    examples_path = _resolve_path_under_root(paths, examples_path)
+    customer_mapping_path = getattr(
+        args,
+        "two_tower_customer_mapping_path",
+        None,
+    ) or paths.two_tower_customer_mapping_path(examples_path)
+    article_mapping_path = getattr(
+        args,
+        "two_tower_article_mapping_path",
+        None,
+    ) or paths.two_tower_article_mapping_path(examples_path)
+    customer_mapping_path = _resolve_path_under_root(paths, customer_mapping_path)
+    article_mapping_path = _resolve_path_under_root(paths, article_mapping_path)
+    config = TwoTowerSmokeTrainingConfig(
+        embedding_dim=args.two_tower_embedding_dim,
+        epochs=args.two_tower_epochs,
+        learning_rate=args.two_tower_learning_rate,
+        l2=args.two_tower_l2,
+        seed=args.two_tower_seed,
+        loss=args.two_tower_loss,
+        max_training_examples=args.two_tower_max_training_examples,
+    )
+    print(
+        "Training two-tower candidate model from exported examples: " f"{examples_path}",
+        flush=True,
+    )
+    model, training = train_two_tower_smoke_model_from_csv(
+        examples_path=examples_path,
+        customer_mapping_path=customer_mapping_path,
+        article_mapping_path=article_mapping_path,
+        config=config,
+    )
+    print(
+        "Two-tower candidate model trained: "
+        f"rows={training.rows_read}, positives={training.positive_examples}, "
+        f"negatives={training.negative_examples}, loss={training.final_average_loss:.8f}",
+        flush=True,
+    )
+    return model
+
+
+def _two_tower_config_slug(args: argparse.Namespace) -> str | None:
+    """Return a compact two-tower source config slug for artifact names."""
+
+    if not getattr(args, "include_two_tower_retrieval", False):
+        return None
+    return (
+        f"{args.two_tower_positive_selection}_"
+        f"pos{args.two_tower_max_positive_examples}_"
+        f"neg{args.two_tower_negatives_per_positive}_"
+        f"dim{args.two_tower_embedding_dim}_"
+        f"e{args.two_tower_epochs}_"
+        f"{args.two_tower_loss}"
+    )
+
+
 def _ranker_candidate_export_path(
     paths: ProjectPaths,
     split: TemporalSplit,
@@ -3250,6 +3446,8 @@ def _ranker_candidate_export_path(
             if getattr(args, "content_similarity_manifest_path", None) is not None
             else None
         ),
+        include_two_tower_retrieval=getattr(args, "include_two_tower_retrieval", False),
+        two_tower_config_slug=_two_tower_config_slug(args),
         max_target_customers=getattr(args, "max_target_customers", None),
     )
     return _resolve_path_under_root(paths, candidate_path)
@@ -3288,6 +3486,7 @@ def _write_cached_ranker_candidate_export(
         cache[output_path] = candidate_report_path
         return candidate_report_path
 
+    two_tower_model = _train_two_tower_candidate_model_if_enabled(paths, split, args)
     summary = write_validation_candidate_export(
         transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
         split=split,
@@ -3348,6 +3547,13 @@ def _write_cached_ranker_candidate_export(
             args,
             "content_similarity_candidate_pool_size",
             None,
+        ),
+        two_tower_model=two_tower_model,
+        two_tower_source_name=getattr(args, "two_tower_source_name", TWO_TOWER_RETRIEVAL_SOURCE),
+        two_tower_max_retrieval_articles=getattr(
+            args,
+            "two_tower_max_retrieval_articles",
+            5000,
         ),
         max_target_customers=getattr(args, "max_target_customers", None),
     )
