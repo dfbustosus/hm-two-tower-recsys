@@ -262,6 +262,29 @@ def rank_two_tower_candidates(
 ) -> tuple[str, ...]:
     """Rank article IDs for one customer using two-tower dot-product scores."""
 
+    return tuple(
+        article_id
+        for article_id, _ in score_two_tower_candidates(
+            model,
+            customer_id,
+            k=k,
+            max_retrieval_articles=max_retrieval_articles,
+            article_score_prior=article_score_prior,
+            score_prior_weight=score_prior_weight,
+        )
+    )
+
+
+def score_two_tower_candidates(
+    model: TwoTowerSmokeModel,
+    customer_id: str,
+    k: int,
+    max_retrieval_articles: int | None = None,
+    article_score_prior: Mapping[str, float] | None = None,
+    score_prior_weight: float = 0.0,
+) -> tuple[tuple[str, float], ...]:
+    """Rank article IDs with their two-tower retrieval scores for one customer."""
+
     if k <= 0:
         raise ValueError("k must be positive")
     if max_retrieval_articles is not None and max_retrieval_articles <= 0:
@@ -293,7 +316,7 @@ def rank_two_tower_candidates(
         ),
         key=lambda item: (-item[1], item[0]),
     )
-    return tuple(article_id for article_id, _ in ranked[:k])
+    return tuple(ranked[:k])
 
 
 def evaluate_two_tower_retrieval(
