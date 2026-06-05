@@ -27,6 +27,7 @@ from hm_recsys.retrieval.source_names import (
     REPEAT_SOURCE,
     TEXT_SIMILARITY_SOURCE,
     TWO_TOWER_MULTIMODAL_SOURCE,
+    TWO_TOWER_RETRIEVAL_SOURCE,
 )
 
 BASELINE_SOURCE_ORDER = (
@@ -66,6 +67,8 @@ class DeterministicRankerWeights:
         garment_group_popularity_score_weight: Weight for garment-group score.
         content_similarity_presence_weight: Additive weight for content candidates.
         content_similarity_score_weight: Weight for content cosine/source score.
+        two_tower_retrieval_presence_weight: Additive weight for two-tower retrieval.
+        two_tower_retrieval_score_weight: Weight for two-tower retrieval score.
         source_count_weight: Weight for the number of sources emitting the pair.
         best_rank_score_weight: Weight for reciprocal best source rank.
     """
@@ -84,6 +87,8 @@ class DeterministicRankerWeights:
     garment_group_popularity_score_weight: float = 0.25
     content_similarity_presence_weight: float = 0.10
     content_similarity_score_weight: float = 0.05
+    two_tower_retrieval_presence_weight: float = 0.10
+    two_tower_retrieval_score_weight: float = 0.05
     source_count_weight: float = 0.05
     best_rank_score_weight: float = 0.05
 
@@ -113,6 +118,8 @@ class CandidateFeatures:
         garment_group_popularity_score: Source score from garment-group popularity.
         content_similarity_rank: Optional source rank from cached content similarity.
         content_similarity_score: Source score from cached content similarity.
+        two_tower_retrieval_rank: Optional source rank from two-tower retrieval.
+        two_tower_retrieval_score: Source score from two-tower retrieval.
         source_count: Number of candidate sources emitting this pair.
         best_rank: Best one-based source rank across sources.
         max_source_score: Maximum raw source score across sources.
@@ -135,6 +142,8 @@ class CandidateFeatures:
     garment_group_popularity_score: float = 0.0
     content_similarity_rank: int | None = None
     content_similarity_score: float = 0.0
+    two_tower_retrieval_rank: int | None = None
+    two_tower_retrieval_score: float = 0.0
     source_count: int = 0
     best_rank: int | None = None
     max_source_score: float = 0.0
@@ -191,6 +200,15 @@ class CandidateFeatures:
                 self.garment_group_popularity_score,
                 record.source_score,
             )
+        elif record.source == TWO_TOWER_RETRIEVAL_SOURCE:
+            self.two_tower_retrieval_rank = _min_optional_rank(
+                self.two_tower_retrieval_rank,
+                record.source_rank,
+            )
+            self.two_tower_retrieval_score = max(
+                self.two_tower_retrieval_score,
+                record.source_score,
+            )
         elif record.source in CONTENT_SIMILARITY_SOURCES:
             self.content_similarity_rank = _min_optional_rank(
                 self.content_similarity_rank, record.source_rank
@@ -238,6 +256,12 @@ class CandidateFeatures:
         """Return whether a content-similarity source emitted this pair."""
 
         return self.content_similarity_rank is not None
+
+    @property
+    def has_two_tower_retrieval(self) -> bool:
+        """Return whether two-tower retrieval emitted this pair."""
+
+        return self.two_tower_retrieval_rank is not None
 
 
 @dataclass(frozen=True)
@@ -393,6 +417,9 @@ def score_candidate(
     if features.has_content_similarity:
         score += weights.content_similarity_presence_weight
         score += weights.content_similarity_score_weight * features.content_similarity_score
+    if features.has_two_tower_retrieval:
+        score += weights.two_tower_retrieval_presence_weight
+        score += weights.two_tower_retrieval_score_weight * features.two_tower_retrieval_score
     return score
 
 
