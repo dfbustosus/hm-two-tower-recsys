@@ -32,7 +32,7 @@ TWO_TOWER_EXAMPLE_HEADER = (
 TWO_TOWER_CUSTOMER_MAPPING_HEADER = ("customer_index", "customer_id")
 TWO_TOWER_ARTICLE_MAPPING_HEADER = ("article_index", "article_id")
 TwoTowerExportNegativeSampling = Literal["random"]
-TwoTowerPositiveSelection = Literal["first", "latest"]
+TwoTowerPositiveSelection = Literal["first", "latest", "latest_customer"]
 
 
 @dataclass(frozen=True)
@@ -45,9 +45,11 @@ class TwoTowerExampleExportConfig:
         negative_sampling: Negative sampling strategy. The initial export supports
             random negatives only; harder strategies can be added after this data
             contract is stable.
-        positive_selection: Strategy for capped positive exports. ``first`` keeps
-            the earliest unique pairs in transaction-file order; ``latest`` keeps
-            the most recently observed unique pairs before the cutoff.
+        positive_selection: Strategy for positive exports. ``first`` keeps the
+            earliest unique pairs in transaction-file order; ``latest`` keeps the
+            most recently observed unique pairs before the cutoff;
+            ``latest_customer`` keeps at most one latest positive pair per
+            customer before applying the optional cap.
         max_positive_examples: Optional deterministic cap for smoke exports. When
             provided, the first unique pre-cutoff positive pairs in transaction-file
             order are exported, while negatives still exclude all pre-cutoff positives
@@ -73,7 +75,7 @@ class TwoTowerExampleExportConfig:
             raise ValueError("seed must be non-negative")
         if self.negative_sampling != "random":
             raise ValueError(f"unsupported negative_sampling: {self.negative_sampling!r}")
-        if self.positive_selection not in {"first", "latest"}:
+        if self.positive_selection not in {"first", "latest", "latest_customer"}:
             raise ValueError(f"unsupported positive_selection: {self.positive_selection!r}")
         if self.max_positive_examples is not None and self.max_positive_examples <= 0:
             raise ValueError("max_positive_examples must be positive when provided")
@@ -200,7 +202,10 @@ def write_two_tower_example_export(
         progress_callback=progress_callback,
     )
     customer_positive_items = scan.customer_positive_items
-    if export_config.max_positive_examples is not None:
+    if (
+        export_config.max_positive_examples is not None
+        or export_config.positive_selection == "latest_customer"
+    ):
         customer_positive_items = _collect_selected_customer_positive_items(
             transactions=transaction_iter_factory(),
             split=split,
@@ -343,10 +348,12 @@ def _scan_pre_cutoff_transactions(
     selected_customer_ids: set[str] = set()
     positive_pair_stats: OrderedDict[tuple[str, str], PositivePairStats] = OrderedDict()
     customer_positive_items: dict[str, set[str]] = {}
-    full_export = config.max_positive_examples is None
+    latest_customer_selection = config.positive_selection == "latest_customer"
+    full_export = config.max_positive_examples is None and not latest_customer_selection
     latest_capped_export = (
         config.max_positive_examples is not None and config.positive_selection == "latest"
     )
+    latest_customer_pair_stats: dict[str, tuple[str, PositivePairStats]] = {}
 
     for scanned_rows, transaction in enumerate(transactions, start=1):
         if transaction.t_dat >= split.cutoff:
@@ -360,7 +367,14 @@ def _scan_pre_cutoff_transactions(
         train_rows_seen += 1
         known_article_ids.add(transaction.article_id)
         key = (transaction.customer_id, transaction.article_id)
-        if latest_capped_export:
+        if latest_customer_selection:
+            _update_latest_customer_positive_pair_stats(
+                latest_customer_pair_stats,
+                transaction.customer_id,
+                transaction.article_id,
+                transaction.t_dat,
+            )
+        elif latest_capped_export:
             _update_latest_positive_pair_stats(
                 positive_pair_stats,
                 key,
@@ -386,6 +400,12 @@ def _scan_pre_cutoff_transactions(
         progress_callback,
     )
     if latest_capped_export:
+        selected_customer_ids = {customer_id for customer_id, _ in positive_pair_stats}
+    if latest_customer_selection:
+        positive_pair_stats = _select_latest_customer_positive_pair_stats(
+            latest_customer_pair_stats,
+            max_positive_examples=config.max_positive_examples,
+        )
         selected_customer_ids = {customer_id for customer_id, _ in positive_pair_stats}
 
     return _PreCutoffScan(
@@ -458,6 +478,60 @@ def _update_latest_positive_pair_stats(
     positive_pair_stats[key] = PositivePairStats(count=count, last_seen=seen_date)
     while len(positive_pair_stats) > max_positive_examples:
         positive_pair_stats.popitem(last=False)
+
+
+def _update_latest_customer_positive_pair_stats(
+    latest_customer_pair_stats: dict[str, tuple[str, PositivePairStats]],
+    customer_id: str,
+    article_id: str,
+    seen_date: date,
+) -> None:
+    """Track the latest observed positive pair for one customer."""
+
+    current = latest_customer_pair_stats.get(customer_id)
+    if current is None:
+        latest_customer_pair_stats[customer_id] = (
+            article_id,
+            PositivePairStats(count=1, last_seen=seen_date),
+        )
+        return
+
+    current_article_id, current_stats = current
+    if article_id == current_article_id:
+        latest_customer_pair_stats[customer_id] = (
+            article_id,
+            PositivePairStats(
+                count=current_stats.count + 1,
+                last_seen=max(current_stats.last_seen, seen_date),
+            ),
+        )
+        return
+    if seen_date >= current_stats.last_seen:
+        latest_customer_pair_stats[customer_id] = (
+            article_id,
+            PositivePairStats(count=1, last_seen=seen_date),
+        )
+
+
+def _select_latest_customer_positive_pair_stats(
+    latest_customer_pair_stats: dict[str, tuple[str, PositivePairStats]],
+    max_positive_examples: int | None,
+) -> OrderedDict[tuple[str, str], PositivePairStats]:
+    """Return selected latest-customer positive pairs with deterministic ordering."""
+
+    ranked = sorted(
+        latest_customer_pair_stats.items(),
+        key=lambda item: (-item[1][1].last_seen.toordinal(), item[0], item[1][0]),
+    )
+    if max_positive_examples is not None:
+        ranked = ranked[:max_positive_examples]
+    selected = OrderedDict()
+    for customer_id, (article_id, stats) in sorted(
+        ranked,
+        key=lambda item: (item[0], item[1][0]),
+    ):
+        selected[(customer_id, article_id)] = stats
+    return selected
 
 
 def _write_mapping(path: Path, header: tuple[str, str], ids: tuple[str, ...]) -> None:
