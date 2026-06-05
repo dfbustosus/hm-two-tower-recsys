@@ -53,7 +53,9 @@ from hm_recsys.retrieval.source_names import (
     MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    TWO_TOWER_RETRIEVAL_SOURCE,
 )
+from hm_recsys.training.two_tower_retrieval import TwoTowerSmokeModel, score_two_tower_candidates
 
 CANDIDATE_EXPORT_HEADER = (
     "customer_id",
@@ -113,6 +115,9 @@ class CandidateExportSummary:
         content_similarity_popularity_prior_weight: Popularity-prior blend weight.
         content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
         content_similarity_candidate_pool_size: Optional content neighbor pool size.
+        include_two_tower_retrieval: Whether two-tower retrieval rows were exported.
+        two_tower_source_name: Source name for two-tower rows.
+        two_tower_max_retrieval_articles: Article pool cap used by two-tower exact scoring.
         rows_written: Number of CSV data rows written.
         source_row_counts: Row counts by source.
         output_path: Candidate CSV path.
@@ -144,6 +149,9 @@ class CandidateExportSummary:
     content_similarity_popularity_prior_weight: float | None
     content_similarity_popularity_lookback_days: int | None
     content_similarity_candidate_pool_size: int | None
+    include_two_tower_retrieval: bool
+    two_tower_source_name: str | None
+    two_tower_max_retrieval_articles: int | None
     rows_written: int
     source_row_counts: dict[str, int]
     output_path: str
@@ -176,6 +184,9 @@ def write_validation_candidate_export(
     content_similarity_popularity_prior_weight: float = 0.0,
     content_similarity_popularity_lookback_days: int | None = None,
     content_similarity_candidate_pool_size: int | None = None,
+    two_tower_model: TwoTowerSmokeModel | None = None,
+    two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
+    two_tower_max_retrieval_articles: int | None = 5000,
     max_target_customers: int | None = None,
 ) -> CandidateExportSummary:
     """Write ranker-ready candidates for validation-label customers.
@@ -225,6 +236,11 @@ def write_validation_candidate_export(
             used to compute content popularity priors.
         content_similarity_candidate_pool_size: Optional content neighbor pool size
             before popularity-prior reranking.
+        two_tower_model: Optional trained two-tower smoke model used to append
+            model-retrieval candidate rows for mapped validation customers.
+        two_tower_source_name: Source label for two-tower rows.
+        two_tower_max_retrieval_articles: Optional exact-scoring article pool cap
+            for two-tower retrieval.
         max_target_customers: Optional deterministic cap for smoke runs.
 
     Returns:
@@ -244,6 +260,10 @@ def write_validation_candidate_export(
         raise ValueError("content_similarity_source_name must not be empty")
     if content_similarity_manifest_path is not None and content_similarity_max_history_items <= 0:
         raise ValueError("content_similarity_max_history_items must be positive")
+    if two_tower_model is not None and not two_tower_source_name:
+        raise ValueError("two_tower_source_name must not be empty")
+    if two_tower_max_retrieval_articles is not None and two_tower_max_retrieval_articles <= 0:
+        raise ValueError("two_tower_max_retrieval_articles must be positive when provided")
     if include_age_segment_popularity and customer_segment_by_id is None:
         raise ValueError("customer_segment_by_id is required for age-segment popularity")
     if age_segment_bucket_size <= 0:
@@ -351,6 +371,9 @@ def write_validation_candidate_export(
             age_segment_index=age_segment_index,
             garment_group_index=garment_group_index,
             content_similarity_index=content_similarity_index,
+            two_tower_model=two_tower_model,
+            two_tower_source_name=two_tower_source_name,
+            two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
             k=k,
         ):
             writer.writerow(candidate_record_to_row(record))
@@ -411,6 +434,11 @@ def write_validation_candidate_export(
             content_similarity_candidate_pool_size
             if content_similarity_manifest_path is not None
             else None
+        ),
+        include_two_tower_retrieval=two_tower_model is not None,
+        two_tower_source_name=two_tower_source_name if two_tower_model is not None else None,
+        two_tower_max_retrieval_articles=(
+            two_tower_max_retrieval_articles if two_tower_model is not None else None
         ),
         rows_written=rows_written,
         source_row_counts=dict(sorted(source_row_counts.items())),
@@ -516,6 +544,9 @@ def _iter_candidate_records(
     age_segment_index: AgeSegmentPopularityIndex | None = None,
     garment_group_index: ArticleAttributePopularityIndex | None = None,
     content_similarity_index: ContentSimilarityIndex | None = None,
+    two_tower_model: TwoTowerSmokeModel | None = None,
+    two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
+    two_tower_max_retrieval_articles: int | None = 5000,
 ) -> Iterable[CandidateRecord]:
     """Yield source-specific candidate records in deterministic source order."""
 
@@ -529,6 +560,9 @@ def _iter_candidate_records(
             age_segment_index=age_segment_index,
             garment_group_index=garment_group_index,
             content_similarity_index=content_similarity_index,
+            two_tower_model=two_tower_model,
+            two_tower_source_name=two_tower_source_name,
+            two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
             k=k,
         )
 
@@ -543,6 +577,9 @@ def iter_candidate_records_for_customer(
     age_segment_index: AgeSegmentPopularityIndex | None = None,
     garment_group_index: ArticleAttributePopularityIndex | None = None,
     content_similarity_index: ContentSimilarityIndex | None = None,
+    two_tower_model: TwoTowerSmokeModel | None = None,
+    two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
+    two_tower_max_retrieval_articles: int | None = 5000,
 ) -> Iterable[CandidateRecord]:
     """Yield ranker-ready source rows for one customer.
 
@@ -556,6 +593,9 @@ def iter_candidate_records_for_customer(
         garment_group_index: Optional garment-group affinity popularity index.
         k: Maximum candidates emitted per source.
         content_similarity_index: Optional cached content embedding index.
+        two_tower_model: Optional trained two-tower smoke model.
+        two_tower_source_name: Source label for two-tower rows.
+        two_tower_max_retrieval_articles: Optional article pool cap for two-tower scoring.
 
     Yields:
         Source-specific candidate records in deterministic source order.
@@ -626,6 +666,25 @@ def iter_candidate_records_for_customer(
             content_similarity_index,
             customer_id,
             k=k,
+        )
+    if two_tower_model is not None:
+        yield from (
+            CandidateRecord(
+                customer_id=customer_id,
+                article_id=article_id,
+                source=two_tower_source_name,
+                source_rank=rank,
+                source_score=score,
+            )
+            for rank, (article_id, score) in enumerate(
+                score_two_tower_candidates(
+                    two_tower_model,
+                    customer_id,
+                    k=k,
+                    max_retrieval_articles=two_tower_max_retrieval_articles,
+                ),
+                start=1,
+            )
         )
 
 
