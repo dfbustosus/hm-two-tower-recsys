@@ -24,7 +24,9 @@ from hm_recsys.retrieval.source_names import (
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    TWO_TOWER_RETRIEVAL_SOURCE,
 )
+from hm_recsys.training.two_tower_retrieval import TwoTowerSmokeModel
 
 CUSTOMER_ID = "a" * 64
 SECOND_CUSTOMER_ID = "b" * 64
@@ -127,6 +129,45 @@ def test_validation_candidate_export_can_include_cached_content_similarity(
         for row in rows
         if row["source"] == MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE
     } == {CONTENT_SIMILAR_ARTICLE}
+
+
+def test_validation_candidate_export_can_include_two_tower_retrieval(
+    tmp_path: Path,
+) -> None:
+    split = TemporalSplit.from_isoformat("2020-01-08")
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 8), CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
+        TransactionEvent(date(2020, 1, 8), SECOND_CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
+    ]
+    output_path = tmp_path / "two_tower_candidates.csv"
+    model = TwoTowerSmokeModel(
+        customer_ids=(CUSTOMER_ID,),
+        article_ids=(ARTICLE_1, ARTICLE_2),
+        customer_embeddings=((1.0, 0.0),),
+        article_embeddings=((0.2, 0.0), (1.0, 0.0)),
+        article_positive_counts=(1, 1),
+    )
+
+    summary = write_validation_candidate_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=split,
+        submission_customer_ids=(CUSTOMER_ID, SECOND_CUSTOMER_ID),
+        output_path=output_path,
+        k=2,
+        include_co_visitation=False,
+        two_tower_model=model,
+        two_tower_max_retrieval_articles=2,
+    )
+
+    rows = list(csv.DictReader(output_path.open(encoding="utf-8", newline="")))
+    two_tower_rows = [row for row in rows if row["source"] == TWO_TOWER_RETRIEVAL_SOURCE]
+    assert summary.include_two_tower_retrieval is True
+    assert summary.two_tower_source_name == TWO_TOWER_RETRIEVAL_SOURCE
+    assert summary.two_tower_max_retrieval_articles == 2
+    assert summary.source_row_counts[TWO_TOWER_RETRIEVAL_SOURCE] == 2
+    assert {row["customer_id"] for row in two_tower_rows} == {CUSTOMER_ID}
+    assert [row["article_id"] for row in two_tower_rows] == [ARTICLE_2, ARTICLE_1]
 
 
 def test_validation_candidate_export_can_include_age_segment_popularity(
