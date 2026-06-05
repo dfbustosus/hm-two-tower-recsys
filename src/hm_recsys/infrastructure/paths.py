@@ -220,6 +220,8 @@ class ProjectPaths:
         content_similarity_popularity_prior_weight: float | None = None,
         content_similarity_popularity_lookback_days: int | None = None,
         content_similarity_candidate_pool_size: int | None = None,
+        include_two_tower_retrieval: bool = False,
+        two_tower_config_slug: str | None = None,
         max_target_customers: int | None = None,
     ) -> Path:
         """Return the default ranker-ready candidate CSV path.
@@ -241,6 +243,8 @@ class ProjectPaths:
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
             content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
             content_similarity_candidate_pool_size: Optional content reranking pool size.
+            include_two_tower_retrieval: Whether two-tower candidate rows are included.
+            two_tower_config_slug: Optional compact slug for two-tower source config.
             max_target_customers: Optional deterministic smoke-run customer cap.
 
         Returns:
@@ -273,6 +277,10 @@ class ProjectPaths:
         )
         if content_slug is not None:
             name = f"{name}_{content_slug}"
+        if include_two_tower_retrieval:
+            name = f"{name}_two_tower"
+            if two_tower_config_slug is not None:
+                name = f"{name}_{_compact_safe_name(two_tower_config_slug, max_length=32)}"
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
         return self.artifacts_dir / "candidate-exports" / _artifact_filename(name, "csv")
@@ -310,6 +318,8 @@ class ProjectPaths:
         content_similarity_popularity_prior_weight: float | None = None,
         content_similarity_popularity_lookback_days: int | None = None,
         content_similarity_candidate_pool_size: int | None = None,
+        include_two_tower_retrieval: bool = False,
+        two_tower_config_slug: str | None = None,
     ) -> Path:
         """Return the default deterministic ranker baseline report path.
 
@@ -332,6 +342,8 @@ class ProjectPaths:
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
             content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
             content_similarity_candidate_pool_size: Optional content reranking pool size.
+            include_two_tower_retrieval: Whether two-tower candidate rows are included.
+            two_tower_config_slug: Optional compact slug for two-tower source config.
 
         Returns:
             Path under ``artifacts/ranker-baselines/``.
@@ -358,6 +370,10 @@ class ProjectPaths:
             content_similarity_popularity_lookback_days=content_similarity_popularity_lookback_days,
             content_similarity_candidate_pool_size=content_similarity_candidate_pool_size,
         )
+        if include_two_tower_retrieval:
+            name = f"{name}_two_tower"
+            if two_tower_config_slug is not None:
+                name = f"{name}_{_compact_safe_name(two_tower_config_slug, max_length=32)}"
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
         return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
@@ -461,6 +477,8 @@ class ProjectPaths:
         content_similarity_popularity_prior_weight: float | None = None,
         content_similarity_popularity_lookback_days: int | None = None,
         content_similarity_candidate_pool_size: int | None = None,
+        include_two_tower_retrieval: bool = False,
+        two_tower_config_slug: str | None = None,
     ) -> Path:
         """Return the default deterministic-ranker tuning report path.
 
@@ -484,6 +502,8 @@ class ProjectPaths:
             content_similarity_popularity_prior_weight: Optional popularity-prior weight.
             content_similarity_popularity_lookback_days: Optional popularity-prior lookback.
             content_similarity_candidate_pool_size: Optional content reranking pool size.
+            include_two_tower_retrieval: Whether two-tower candidate rows are included.
+            two_tower_config_slug: Optional compact slug for two-tower source config.
 
         Returns:
             Path under ``artifacts/ranker-baselines/``.
@@ -510,6 +530,10 @@ class ProjectPaths:
             content_similarity_popularity_lookback_days=content_similarity_popularity_lookback_days,
             content_similarity_candidate_pool_size=content_similarity_candidate_pool_size,
         )
+        if include_two_tower_retrieval:
+            name = f"{name}_two_tower"
+            if two_tower_config_slug is not None:
+                name = f"{name}_{_compact_safe_name(two_tower_config_slug, max_length=32)}"
         if max_target_customers is not None:
             name = f"{name}_first_{max_target_customers}_customers"
         return self.artifacts_dir / "ranker-baselines" / _artifact_filename(name, "json")
