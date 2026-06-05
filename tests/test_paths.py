@@ -84,6 +84,8 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         co_visitation_neighbors_per_item=100,
         content_similarity_source_name="multimodal_similarity",
         content_similarity_manifest_path=manifest_path,
+        include_two_tower_retrieval=True,
+        two_tower_config_slug="latest_pos100000_neg3_dim32_e80_bpr",
         max_target_customers=1000,
     )
     ranker_report_path = paths.ranker_baseline_report_path(
@@ -96,6 +98,8 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         co_visitation_neighbors_per_item=100,
         content_similarity_source_name="multimodal_similarity",
         content_similarity_manifest_path=manifest_path,
+        include_two_tower_retrieval=True,
+        two_tower_config_slug="latest_pos100000_neg3_dim32_e80_bpr",
     )
     learned_report_path = paths.learned_ranker_baseline_report_path(
         train_cutoff="2020-09-09",
@@ -125,6 +129,8 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
         include_garment_group_popularity=True,
         garment_group_popularity_lookback_days=7,
         garment_group_max_history_items=8,
+        include_two_tower_retrieval=True,
+        two_tower_config_slug="latest_pos100000_neg3_dim32_e80_bpr",
     )
     deterministic_submission_path = paths.deterministic_ranker_submission_path(
         k=12,
@@ -142,6 +148,8 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
 
     assert "content_multimodal_similarity" in candidate_path.stem
     assert "content_multimodal_similarity" in ranker_report_path.stem
+    assert "two_tower" in candidate_path.stem
+    assert "two_tower" in ranker_report_path.stem
     assert "content_multimodal_similarity" in learned_report_path.stem
     assert "hf-clip_fashion-clip" in candidate_path.stem
     assert "lookback_7" in ranker_report_path.stem
@@ -149,6 +157,7 @@ def test_project_paths_encode_content_similarity_source_configs(tmp_path: Path) 
     assert "deterministic_ranker_tuning_train_2020-09-09" in tuning_report_path.stem
     assert "age_segment_b10_lookback7" in tuning_report_path.stem
     assert "garment_group_lookback7_h8" in tuning_report_path.stem
+    assert "two_tower" in tuning_report_path.stem
     assert "deterministic_ranker_tuned" in deterministic_submission_path.stem
     assert "age_segment_b10_lookback7" in deterministic_submission_path.stem
     assert "garment_group_lookback7_h8" in deterministic_submission_path.stem
