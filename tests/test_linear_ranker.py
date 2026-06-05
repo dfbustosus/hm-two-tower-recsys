@@ -24,6 +24,7 @@ from hm_recsys.retrieval.source_names import (
     MULTIMODAL_SIMILARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    TWO_TOWER_RETRIEVAL_SOURCE,
 )
 
 CUSTOMER_ID = "a" * 64
@@ -53,6 +54,8 @@ def test_feature_vector_matches_schema() -> None:
         garment_group_popularity_score=0.6,
         content_similarity_rank=1,
         content_similarity_score=0.8,
+        two_tower_retrieval_rank=5,
+        two_tower_retrieval_score=1.2,
         source_count=1,
         best_rank=2,
     )
@@ -71,6 +74,8 @@ def test_feature_vector_matches_schema() -> None:
     )
     assert vector[LINEAR_FEATURE_NAMES.index("has_content_similarity")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("content_similarity_score")] == pytest.approx(0.8)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_two_tower_retrieval")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("two_tower_retrieval_score")] == pytest.approx(1.2)
 
 
 def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
@@ -80,9 +85,11 @@ def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
         (CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
         (CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0),
         (CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 1, 0.9),
+        (CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_SOURCE, 1, 1.1),
         (SECOND_CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
         (SECOND_CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0),
         (SECOND_CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 1, 0.9),
+        (SECOND_CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_SOURCE, 1, 1.1),
     ]
     write_candidate_csv(train_path, rows)
     write_candidate_csv(eval_path, rows)
