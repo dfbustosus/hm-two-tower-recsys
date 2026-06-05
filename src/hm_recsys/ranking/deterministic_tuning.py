@@ -45,6 +45,10 @@ class DeterministicRankerTuningGrid:
             age-segment popularity candidates.
         source_count_weights: Candidate weights for source-count agreement.
         best_rank_score_weights: Candidate weights for reciprocal best source rank.
+        two_tower_retrieval_presence_weights: Candidate additive weights for
+            two-tower retrieval candidates.
+        two_tower_retrieval_score_weights: Candidate score weights for
+            two-tower retrieval scores.
     """
 
     garment_group_popularity_presence_weights: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8)
@@ -53,6 +57,8 @@ class DeterministicRankerTuningGrid:
     age_segment_popularity_score_weights: tuple[float, ...] = (0.0, 0.10, 0.20)
     source_count_weights: tuple[float, ...] = (0.0, 0.05, 0.10)
     best_rank_score_weights: tuple[float, ...] = (0.0, 0.05)
+    two_tower_retrieval_presence_weights: tuple[float, ...] = (0.10,)
+    two_tower_retrieval_score_weights: tuple[float, ...] = (0.05,)
 
     def __post_init__(self) -> None:
         """Validate grid values.
@@ -96,6 +102,8 @@ class DeterministicRankerTuningGrid:
             age_score,
             source_count,
             best_rank,
+            two_tower_presence,
+            two_tower_score,
         ) in product(
             self.garment_group_popularity_presence_weights,
             self.garment_group_popularity_score_weights,
@@ -103,6 +111,8 @@ class DeterministicRankerTuningGrid:
             self.age_segment_popularity_score_weights,
             self.source_count_weights,
             self.best_rank_score_weights,
+            self.two_tower_retrieval_presence_weights,
+            self.two_tower_retrieval_score_weights,
         ):
             yield replace(
                 base_weights,
@@ -112,6 +122,8 @@ class DeterministicRankerTuningGrid:
                 age_segment_popularity_score_weight=age_score,
                 source_count_weight=source_count,
                 best_rank_score_weight=best_rank,
+                two_tower_retrieval_presence_weight=two_tower_presence,
+                two_tower_retrieval_score_weight=two_tower_score,
             )
 
 
