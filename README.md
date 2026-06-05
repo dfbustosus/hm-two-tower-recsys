@@ -532,9 +532,9 @@ make two-tower-retrieval-smoke CUTOFF=2020-09-16
 ```
 
 This command first exports cutoff-safe examples, then trains a small pure-Python
-customer/item embedding model with logistic dot-product loss, retrieves top-K
-article candidates for mapped validation customers, and reports MAP@12 plus
-candidate Recall@12/50/100.
+customer/item embedding model with either pointwise logistic loss or pairwise BPR
+loss, retrieves top-K article candidates for mapped validation customers, and
+reports MAP@12 plus candidate Recall@12/50/100.
 It is a challenger candidate source only. It must improve candidate recall or
 downstream MAP@12 before it is blended into the ranker or used for submissions.
 Use bounded settings for fast iteration:
@@ -547,6 +547,27 @@ make two-tower-retrieval-smoke \
   TWO_TOWER_MAX_RETRIEVAL_ARTICLES=5000 \
   TWO_TOWER_EVALUATION_KS="12 50 100"
 ```
+
+The strongest current two-tower smoke configuration uses latest positive pairs,
+multiple random negatives, and BPR ranking loss. Use `TWO_TOWER_MAX_EVAL_CUSTOMERS=0`
+to evaluate all mapped validation customers rather than the default smoke cap:
+
+```bash
+make two-tower-retrieval-smoke \
+  CUTOFF=2020-09-16 \
+  TWO_TOWER_POSITIVE_SELECTION=latest \
+  TWO_TOWER_NEGATIVES_PER_POSITIVE=3 \
+  TWO_TOWER_MAX_POSITIVE_EXAMPLES=100000 \
+  TWO_TOWER_EMBEDDING_DIM=32 \
+  TWO_TOWER_EPOCHS=80 \
+  TWO_TOWER_LOSS=bpr \
+  TWO_TOWER_MAX_EVAL_CUSTOMERS=0
+```
+
+For coverage experiments, `TWO_TOWER_POSITIVE_SELECTION=latest_customer` selects
+at most one latest positive pair per customer, but it should be judged against
+same-scope MAP/recall before promotion because one-positive-per-user training can
+trade ranking quality for broader mapping coverage.
 
 ## Next implementation gate
 
