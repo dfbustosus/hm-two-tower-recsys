@@ -50,6 +50,9 @@ TWO_TOWER_MAX_RETRIEVAL_ARTICLES ?= 5000
 TWO_TOWER_EVALUATION_KS ?= 12 50 100
 TWO_TOWER_POPULARITY_PRIOR_WEIGHT ?=
 TWO_TOWER_POPULARITY_PRIOR_LOOKBACK_DAYS ?= 7
+INCLUDE_TWO_TOWER_RETRIEVAL ?=
+TWO_TOWER_RANKER_PRESENCE_WEIGHT ?=
+TWO_TOWER_RANKER_SCORE_WEIGHT ?=
 ARTICLE_CONTENT_OUTPUT ?=
 ARTICLE_CONTENT_REPORT ?=
 ARTICLE_CONTENT_MAX_ARTICLES ?=
@@ -276,6 +279,9 @@ candidate-export: venv
 	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli export-candidates --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(CANDIDATE_K)" $$extra_args
 
 ranker-baseline: venv
@@ -296,6 +302,15 @@ ranker-baseline: venv
 	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_RANKER_PRESENCE_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --two-tower-ranker-presence-weight $(TWO_TOWER_RANKER_PRESENCE_WEIGHT)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_RANKER_SCORE_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --two-tower-ranker-score-weight $(TWO_TOWER_RANKER_SCORE_WEIGHT)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-ranker-baseline --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" $$extra_args
 
 deterministic-ranker-tuning: venv
@@ -315,6 +330,15 @@ deterministic-ranker-tuning: venv
 	fi; \
 	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
+	fi; \
+	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_RANKER_PRESENCE_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --two-tower-ranker-presence-weight $(TWO_TOWER_RANKER_PRESENCE_WEIGHT)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_RANKER_SCORE_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --two-tower-ranker-score-weight $(TWO_TOWER_RANKER_SCORE_WEIGHT)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli tune-deterministic-ranker --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" --top-trials "$(DETERMINISTIC_TUNING_TOP_TRIALS)" $$extra_args
 
