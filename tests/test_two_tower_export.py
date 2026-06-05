@@ -151,6 +151,35 @@ def test_two_tower_export_can_select_latest_positive_pairs(tmp_path: Path) -> No
     assert {row["article_id"] for row in positive_rows} == {ARTICLE_3, ARTICLE_4}
 
 
+def test_two_tower_export_can_select_latest_positive_per_customer(tmp_path: Path) -> None:
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 5), CUSTOMER_ID, ARTICLE_2),
+        TransactionEvent(date(2020, 1, 4), SECOND_CUSTOMER_ID, ARTICLE_3),
+        TransactionEvent(date(2020, 1, 6), THIRD_CUSTOMER_ID, ARTICLE_4),
+    ]
+    paths = export_paths(tmp_path)
+
+    summary = write_two_tower_example_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=TemporalSplit.from_isoformat("2020-01-08"),
+        examples_path=paths["examples"],
+        customer_mapping_path=paths["customers"],
+        article_mapping_path=paths["articles"],
+        config=TwoTowerExampleExportConfig(
+            negatives_per_positive=0,
+            max_positive_examples=2,
+            positive_selection="latest_customer",
+        ),
+    )
+
+    positive_rows = [row for row in read_dict_rows(paths["examples"]) if row["label"] == "1"]
+    assert summary.positive_selection == "latest_customer"
+    assert summary.unique_customers == 2
+    assert {row["customer_id"] for row in positive_rows} == {CUSTOMER_ID, THIRD_CUSTOMER_ID}
+    assert {row["article_id"] for row in positive_rows} == {ARTICLE_2, ARTICLE_4}
+
+
 def test_two_tower_export_reports_skipped_negatives_when_pool_is_empty(tmp_path: Path) -> None:
     events = [TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1)]
     paths = export_paths(tmp_path)
