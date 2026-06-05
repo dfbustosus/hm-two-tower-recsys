@@ -665,7 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
     two_tower_export_parser.add_argument(
         "--positive-selection",
         default="first",
-        choices=("first", "latest"),
+        choices=("first", "latest", "latest_customer"),
         help="Positive-pair selection strategy when --max-positive-examples is set.",
     )
     two_tower_export_parser.add_argument("--project-root", type=Path, default=None)
@@ -690,7 +690,7 @@ def build_parser() -> argparse.ArgumentParser:
     two_tower_eval_parser.add_argument(
         "--positive-selection",
         default="first",
-        choices=("first", "latest"),
+        choices=("first", "latest", "latest_customer"),
         help="Positive-pair selection strategy used to infer default artifact paths.",
     )
     two_tower_eval_parser.add_argument("--seed", type=int, default=42)
@@ -739,7 +739,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-eval-customers",
         type=int,
         default=1000,
-        help="Optional deterministic cap for mapped validation customers.",
+        help=(
+            "Optional deterministic cap for mapped validation customers. "
+            "Use 0 for all mapped customers."
+        ),
     )
     two_tower_eval_parser.add_argument(
         "--max-retrieval-articles",
@@ -2779,6 +2782,7 @@ def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
     )
     customer_mapping_path = _resolve_path_under_root(paths, customer_mapping_path)
     article_mapping_path = _resolve_path_under_root(paths, article_mapping_path)
+    max_eval_customers = args.max_eval_customers if args.max_eval_customers != 0 else None
     report_path = args.report_path or paths.two_tower_retrieval_report_path(
         examples_path=examples_path,
         embedding_dim=args.embedding_dim,
@@ -2791,7 +2795,7 @@ def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
         popularity_prior_lookback_days=(
             args.popularity_prior_lookback_days if args.popularity_prior_weight > 0.0 else None
         ),
-        max_eval_customers=args.max_eval_customers,
+        max_eval_customers=max_eval_customers,
         max_retrieval_articles=args.max_retrieval_articles,
     )
     report_path = _resolve_path_under_root(paths, report_path)
@@ -2847,7 +2851,7 @@ def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
         validation_labels,
         k=args.k,
         evaluation_ks=args.evaluation_ks,
-        max_eval_customers=args.max_eval_customers,
+        max_eval_customers=max_eval_customers,
         max_retrieval_articles=args.max_retrieval_articles,
         article_score_prior=article_score_prior,
         score_prior_weight=args.popularity_prior_weight,
