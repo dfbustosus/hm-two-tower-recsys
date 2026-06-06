@@ -9,6 +9,7 @@ import random
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
+from functools import cached_property
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
@@ -105,11 +106,22 @@ class TwoTowerSmokeModel:
     article_embeddings: tuple[tuple[float, ...], ...]
     article_positive_counts: tuple[int, ...]
 
-    @property
+    @cached_property
     def customer_id_to_index(self) -> dict[str, int]:
         """Return customer ID to embedding-row mapping."""
 
         return {customer_id: index for index, customer_id in enumerate(self.customer_ids)}
+
+    @cached_property
+    def article_indices_by_positive_count(self) -> tuple[int, ...]:
+        """Return article indices ordered by training popularity for retrieval caps."""
+
+        return tuple(
+            sorted(
+                range(len(self.article_ids)),
+                key=lambda index: (-self.article_positive_counts[index], self.article_ids[index]),
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -686,7 +698,13 @@ def _candidate_article_indices(
     max_retrieval_articles: int | None,
     article_score_prior: Mapping[str, float] | None = None,
 ) -> tuple[int, ...]:
-    ranked_indices = sorted(
+    if article_score_prior is None:
+        ranked_indices = model.article_indices_by_positive_count
+        if max_retrieval_articles is not None:
+            return ranked_indices[:max_retrieval_articles]
+        return ranked_indices
+
+    ranked_indices_with_prior = sorted(
         range(len(model.article_ids)),
         key=lambda index: (
             -_article_prior_score(model.article_ids[index], article_score_prior),
@@ -695,8 +713,8 @@ def _candidate_article_indices(
         ),
     )
     if max_retrieval_articles is not None:
-        return tuple(ranked_indices[:max_retrieval_articles])
-    return tuple(ranked_indices)
+        return tuple(ranked_indices_with_prior[:max_retrieval_articles])
+    return tuple(ranked_indices_with_prior)
 
 
 def _article_prior_score(
