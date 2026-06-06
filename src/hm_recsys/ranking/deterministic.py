@@ -23,10 +23,13 @@ from hm_recsys.retrieval.source_names import (
     IMAGE_SIMILARITY_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
+    RECENT_POPULARITY_1D_SOURCE,
+    RECENT_POPULARITY_3D_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
     TEXT_SIMILARITY_SOURCE,
     TWO_TOWER_MULTIMODAL_SOURCE,
+    TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE,
     TWO_TOWER_RETRIEVAL_SOURCE,
 )
 
@@ -55,6 +58,10 @@ class DeterministicRankerWeights:
         repeat_score_weight: Weight applied to repeat reciprocal-rank score.
         recent_popularity_presence_weight: Additive weight for recent popularity.
         recent_popularity_score_weight: Weight for recent popularity reciprocal rank.
+        recent_popularity_1d_presence_weight: Additive weight for 1-day popularity.
+        recent_popularity_1d_score_weight: Weight for 1-day popularity reciprocal rank.
+        recent_popularity_3d_presence_weight: Additive weight for 3-day popularity.
+        recent_popularity_3d_score_weight: Weight for 3-day popularity reciprocal rank.
         all_time_popularity_presence_weight: Additive weight for all-time popularity.
         all_time_popularity_score_weight: Weight for all-time popularity reciprocal rank.
         co_visitation_presence_weight: Additive weight for co-visitation candidates.
@@ -69,6 +76,10 @@ class DeterministicRankerWeights:
         content_similarity_score_weight: Weight for content cosine/source score.
         two_tower_retrieval_presence_weight: Additive weight for two-tower retrieval.
         two_tower_retrieval_score_weight: Weight for two-tower retrieval score.
+        two_tower_retrieval_latest_customer_presence_weight: Additive weight for the
+            broader latest-positive-per-customer two-tower source.
+        two_tower_retrieval_latest_customer_score_weight: Score weight for the
+            broader latest-positive-per-customer two-tower source.
         source_count_weight: Weight for the number of sources emitting the pair.
         best_rank_score_weight: Weight for reciprocal best source rank.
     """
@@ -77,6 +88,10 @@ class DeterministicRankerWeights:
     repeat_score_weight: float = 2.0
     recent_popularity_presence_weight: float = 1.0
     recent_popularity_score_weight: float = 1.0
+    recent_popularity_1d_presence_weight: float = 1.0
+    recent_popularity_1d_score_weight: float = 1.0
+    recent_popularity_3d_presence_weight: float = 1.0
+    recent_popularity_3d_score_weight: float = 1.0
     all_time_popularity_presence_weight: float = 0.15
     all_time_popularity_score_weight: float = 0.15
     co_visitation_presence_weight: float = 0.35
@@ -89,6 +104,8 @@ class DeterministicRankerWeights:
     content_similarity_score_weight: float = 0.05
     two_tower_retrieval_presence_weight: float = 0.10
     two_tower_retrieval_score_weight: float = 0.05
+    two_tower_retrieval_latest_customer_presence_weight: float = 0.10
+    two_tower_retrieval_latest_customer_score_weight: float = 0.05
     source_count_weight: float = 0.05
     best_rank_score_weight: float = 0.05
 
@@ -108,6 +125,10 @@ class CandidateFeatures:
         repeat_score: Source score from repeat candidates.
         recent_popularity_rank: Optional source rank from recent popularity.
         recent_popularity_score: Source score from recent popularity.
+        recent_popularity_1d_rank: Optional source rank from 1-day popularity.
+        recent_popularity_1d_score: Source score from 1-day popularity.
+        recent_popularity_3d_rank: Optional source rank from 3-day popularity.
+        recent_popularity_3d_score: Source score from 3-day popularity.
         all_time_popularity_rank: Optional source rank from all-time popularity.
         all_time_popularity_score: Source score from all-time popularity.
         co_visitation_rank: Optional source rank from co-visitation.
@@ -120,6 +141,9 @@ class CandidateFeatures:
         content_similarity_score: Source score from cached content similarity.
         two_tower_retrieval_rank: Optional source rank from two-tower retrieval.
         two_tower_retrieval_score: Source score from two-tower retrieval.
+        two_tower_retrieval_latest_customer_rank: Optional source rank from broader
+            latest-positive-per-customer two-tower retrieval.
+        two_tower_retrieval_latest_customer_score: Source score from broader two-tower retrieval.
         source_count: Number of candidate sources emitting this pair.
         best_rank: Best one-based source rank across sources.
         max_source_score: Maximum raw source score across sources.
@@ -132,6 +156,10 @@ class CandidateFeatures:
     repeat_score: float = 0.0
     recent_popularity_rank: int | None = None
     recent_popularity_score: float = 0.0
+    recent_popularity_1d_rank: int | None = None
+    recent_popularity_1d_score: float = 0.0
+    recent_popularity_3d_rank: int | None = None
+    recent_popularity_3d_score: float = 0.0
     all_time_popularity_rank: int | None = None
     all_time_popularity_score: float = 0.0
     co_visitation_rank: int | None = None
@@ -144,6 +172,8 @@ class CandidateFeatures:
     content_similarity_score: float = 0.0
     two_tower_retrieval_rank: int | None = None
     two_tower_retrieval_score: float = 0.0
+    two_tower_retrieval_latest_customer_rank: int | None = None
+    two_tower_retrieval_latest_customer_score: float = 0.0
     source_count: int = 0
     best_rank: int | None = None
     max_source_score: float = 0.0
@@ -170,6 +200,20 @@ class CandidateFeatures:
                 self.recent_popularity_rank, record.source_rank
             )
             self.recent_popularity_score = max(self.recent_popularity_score, record.source_score)
+        elif record.source == RECENT_POPULARITY_1D_SOURCE:
+            self.recent_popularity_1d_rank = _min_optional_rank(
+                self.recent_popularity_1d_rank, record.source_rank
+            )
+            self.recent_popularity_1d_score = max(
+                self.recent_popularity_1d_score, record.source_score
+            )
+        elif record.source == RECENT_POPULARITY_3D_SOURCE:
+            self.recent_popularity_3d_rank = _min_optional_rank(
+                self.recent_popularity_3d_rank, record.source_rank
+            )
+            self.recent_popularity_3d_score = max(
+                self.recent_popularity_3d_score, record.source_score
+            )
         elif record.source == ALL_TIME_POPULARITY_SOURCE:
             self.all_time_popularity_rank = _min_optional_rank(
                 self.all_time_popularity_rank, record.source_rank
@@ -209,6 +253,15 @@ class CandidateFeatures:
                 self.two_tower_retrieval_score,
                 record.source_score,
             )
+        elif record.source == TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE:
+            self.two_tower_retrieval_latest_customer_rank = _min_optional_rank(
+                self.two_tower_retrieval_latest_customer_rank,
+                record.source_rank,
+            )
+            self.two_tower_retrieval_latest_customer_score = max(
+                self.two_tower_retrieval_latest_customer_score,
+                record.source_score,
+            )
         elif record.source in CONTENT_SIMILARITY_SOURCES:
             self.content_similarity_rank = _min_optional_rank(
                 self.content_similarity_rank, record.source_rank
@@ -226,6 +279,18 @@ class CandidateFeatures:
         """Return whether recent popularity emitted this pair."""
 
         return self.recent_popularity_rank is not None
+
+    @property
+    def has_recent_popularity_1d(self) -> bool:
+        """Return whether one-day popularity emitted this pair."""
+
+        return self.recent_popularity_1d_rank is not None
+
+    @property
+    def has_recent_popularity_3d(self) -> bool:
+        """Return whether three-day popularity emitted this pair."""
+
+        return self.recent_popularity_3d_rank is not None
 
     @property
     def has_all_time_popularity(self) -> bool:
@@ -262,6 +327,12 @@ class CandidateFeatures:
         """Return whether two-tower retrieval emitted this pair."""
 
         return self.two_tower_retrieval_rank is not None
+
+    @property
+    def has_two_tower_retrieval_latest_customer(self) -> bool:
+        """Return whether the broader latest-customer two-tower source emitted this pair."""
+
+        return self.two_tower_retrieval_latest_customer_rank is not None
 
 
 @dataclass(frozen=True)
@@ -400,6 +471,12 @@ def score_candidate(
     if features.has_recent_popularity:
         score += weights.recent_popularity_presence_weight
         score += weights.recent_popularity_score_weight * features.recent_popularity_score
+    if features.has_recent_popularity_1d:
+        score += weights.recent_popularity_1d_presence_weight
+        score += weights.recent_popularity_1d_score_weight * features.recent_popularity_1d_score
+    if features.has_recent_popularity_3d:
+        score += weights.recent_popularity_3d_presence_weight
+        score += weights.recent_popularity_3d_score_weight * features.recent_popularity_3d_score
     if features.has_all_time_popularity:
         score += weights.all_time_popularity_presence_weight
         score += weights.all_time_popularity_score_weight * features.all_time_popularity_score
@@ -420,6 +497,12 @@ def score_candidate(
     if features.has_two_tower_retrieval:
         score += weights.two_tower_retrieval_presence_weight
         score += weights.two_tower_retrieval_score_weight * features.two_tower_retrieval_score
+    if features.has_two_tower_retrieval_latest_customer:
+        score += weights.two_tower_retrieval_latest_customer_presence_weight
+        score += (
+            weights.two_tower_retrieval_latest_customer_score_weight
+            * features.two_tower_retrieval_latest_customer_score
+        )
     return score
 
 
