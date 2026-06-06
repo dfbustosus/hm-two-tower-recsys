@@ -102,7 +102,8 @@ def build_co_visitation_index(
         raise ValueError("progress_interval must be positive when provided")
 
     target_customer_set = set(target_customer_ids)
-    mutable_histories: dict[str, list[str]] = {}
+    mutable_all_histories: dict[str, list[str]] = {}
+    mutable_target_histories: dict[str, list[str]] = {}
     train_rows_used = 0
     scanned_rows = 0
 
@@ -111,14 +112,17 @@ def build_co_visitation_index(
             _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
             continue
         train_rows_used += 1
-        if transaction.customer_id not in target_customer_set:
-            _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
-            continue
         _update_recent_unique_history(
-            mutable_histories.setdefault(transaction.customer_id, []),
+            mutable_all_histories.setdefault(transaction.customer_id, []),
             transaction.article_id,
             max_history_items=max_history_items,
         )
+        if transaction.customer_id in target_customer_set:
+            _update_recent_unique_history(
+                mutable_target_histories.setdefault(transaction.customer_id, []),
+                transaction.article_id,
+                max_history_items=max_history_items,
+            )
         _maybe_report_progress(scanned_rows, progress_interval, progress_callback)
     if (
         progress_callback is not None
@@ -130,9 +134,9 @@ def build_co_visitation_index(
 
     if status_callback is not None:
         status_callback(
-            f"building pair counts from {len(mutable_histories)} retained customer histories"
+            f"building pair counts from {len(mutable_all_histories)} pre-cutoff customer histories"
         )
-    pair_counts = _build_pair_counts(mutable_histories.values())
+    pair_counts = _build_pair_counts(mutable_all_histories.values())
     if status_callback is not None:
         status_callback(f"ranking co-visitation neighbors for {len(pair_counts)} source articles")
     neighbors_by_article = _rank_pair_counts(
@@ -140,7 +144,8 @@ def build_co_visitation_index(
         max_neighbors_per_item=max_neighbors_per_item,
     )
     customer_histories = {
-        customer_id: tuple(reversed(history)) for customer_id, history in mutable_histories.items()
+        customer_id: tuple(reversed(history))
+        for customer_id, history in mutable_target_histories.items()
     }
     return CoVisitationIndex(
         neighbors_by_article=neighbors_by_article,
