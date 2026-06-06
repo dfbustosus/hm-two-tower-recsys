@@ -3297,10 +3297,24 @@ def _deterministic_tuning_grid_from_args(
 
     if not getattr(args, "include_two_tower_retrieval", False):
         return DEFAULT_DETERMINISTIC_RANKER_TUNING_GRID
-    return replace(
-        DEFAULT_DETERMINISTIC_RANKER_TUNING_GRID,
+    base_weights = _deterministic_ranker_weights_from_args(args)
+    return DeterministicRankerTuningGrid(
+        garment_group_popularity_presence_weights=(
+            base_weights.garment_group_popularity_presence_weight,
+        ),
+        garment_group_popularity_score_weights=(
+            base_weights.garment_group_popularity_score_weight,
+        ),
+        age_segment_popularity_presence_weights=(
+            base_weights.age_segment_popularity_presence_weight,
+        ),
+        age_segment_popularity_score_weights=(base_weights.age_segment_popularity_score_weight,),
+        source_count_weights=(base_weights.source_count_weight,),
+        best_rank_score_weights=(base_weights.best_rank_score_weight,),
         two_tower_retrieval_presence_weights=(0.10, 0.30, 0.60, 1.00),
         two_tower_retrieval_score_weights=(0.05, 0.15, 0.30),
+        two_tower_retrieval_latest_customer_presence_weights=(0.0, 0.30, 0.60, 1.00),
+        two_tower_retrieval_latest_customer_score_weights=(0.0, 0.05),
     )
 
 
