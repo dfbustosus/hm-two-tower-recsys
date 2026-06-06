@@ -49,6 +49,10 @@ class DeterministicRankerTuningGrid:
             two-tower retrieval candidates.
         two_tower_retrieval_score_weights: Candidate score weights for
             two-tower retrieval scores.
+        two_tower_retrieval_latest_customer_presence_weights: Candidate additive
+            weights for broader latest-positive-per-customer two-tower candidates.
+        two_tower_retrieval_latest_customer_score_weights: Candidate score weights
+            for broader latest-positive-per-customer two-tower scores.
     """
 
     garment_group_popularity_presence_weights: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8)
@@ -59,6 +63,8 @@ class DeterministicRankerTuningGrid:
     best_rank_score_weights: tuple[float, ...] = (0.0, 0.05)
     two_tower_retrieval_presence_weights: tuple[float, ...] = (0.10,)
     two_tower_retrieval_score_weights: tuple[float, ...] = (0.05,)
+    two_tower_retrieval_latest_customer_presence_weights: tuple[float, ...] = (0.10,)
+    two_tower_retrieval_latest_customer_score_weights: tuple[float, ...] = (0.05,)
 
     def __post_init__(self) -> None:
         """Validate grid values.
@@ -104,6 +110,8 @@ class DeterministicRankerTuningGrid:
             best_rank,
             two_tower_presence,
             two_tower_score,
+            two_tower_latest_customer_presence,
+            two_tower_latest_customer_score,
         ) in product(
             self.garment_group_popularity_presence_weights,
             self.garment_group_popularity_score_weights,
@@ -113,6 +121,8 @@ class DeterministicRankerTuningGrid:
             self.best_rank_score_weights,
             self.two_tower_retrieval_presence_weights,
             self.two_tower_retrieval_score_weights,
+            self.two_tower_retrieval_latest_customer_presence_weights,
+            self.two_tower_retrieval_latest_customer_score_weights,
         ):
             yield replace(
                 base_weights,
@@ -124,6 +134,10 @@ class DeterministicRankerTuningGrid:
                 best_rank_score_weight=best_rank,
                 two_tower_retrieval_presence_weight=two_tower_presence,
                 two_tower_retrieval_score_weight=two_tower_score,
+                two_tower_retrieval_latest_customer_presence_weight=(
+                    two_tower_latest_customer_presence
+                ),
+                two_tower_retrieval_latest_customer_score_weight=two_tower_latest_customer_score,
             )
 
 
