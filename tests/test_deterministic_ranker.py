@@ -20,8 +20,11 @@ from hm_recsys.retrieval.source_names import (
     CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
+    RECENT_POPULARITY_1D_SOURCE,
+    RECENT_POPULARITY_3D_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE,
     TWO_TOWER_RETRIEVAL_SOURCE,
 )
 
@@ -35,9 +38,18 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
         records=(
             CandidateRecord(CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
             CandidateRecord(CUSTOMER_ID, ARTICLE_1, RECENT_POPULARITY_SOURCE, 2, 0.5),
+            CandidateRecord(CUSTOMER_ID, ARTICLE_1, RECENT_POPULARITY_1D_SOURCE, 1, 1.0),
+            CandidateRecord(CUSTOMER_ID, ARTICLE_1, RECENT_POPULARITY_3D_SOURCE, 1, 1.0),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, CO_VISITATION_SOURCE, 1, 3.0),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 3, 0.8),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_SOURCE, 4, 1.2),
+            CandidateRecord(
+                CUSTOMER_ID,
+                ARTICLE_2,
+                TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE,
+                5,
+                0.7,
+            ),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, AGE_SEGMENT_POPULARITY_SOURCE, 2, 0.6),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, GARMENT_GROUP_POPULARITY_SOURCE, 1, 0.9),
         ),
@@ -50,7 +62,9 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
     assert article_1.label == 0
     assert article_1.has_repeat
     assert article_1.has_recent_popularity
-    assert article_1.source_count == 2
+    assert article_1.has_recent_popularity_1d
+    assert article_1.has_recent_popularity_3d
+    assert article_1.source_count == 4
     assert article_1.best_rank == 1
     assert article_2.label == 1
     assert article_2.has_co_visitation
@@ -60,6 +74,9 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
     assert article_2.has_two_tower_retrieval
     assert article_2.two_tower_retrieval_score == 1.2
     assert article_2.two_tower_retrieval_rank == 4
+    assert article_2.has_two_tower_retrieval_latest_customer
+    assert article_2.two_tower_retrieval_latest_customer_score == 0.7
+    assert article_2.two_tower_retrieval_latest_customer_rank == 5
     assert article_2.has_age_segment_popularity
     assert article_2.age_segment_popularity_score == 0.6
     assert article_2.has_garment_group_popularity
@@ -132,6 +149,31 @@ def test_deterministic_ranker_scores_two_tower_features_separately() -> None:
     )
 
     assert score_candidate(two_tower_features, weights) > score_candidate(content_features, weights)
+
+
+def test_deterministic_ranker_scores_two_tower_variants_separately() -> None:
+    latest_features = CandidateFeatures(
+        customer_id=CUSTOMER_ID,
+        article_id=ARTICLE_1,
+        two_tower_retrieval_rank=1,
+        two_tower_retrieval_score=2.0,
+    )
+    latest_customer_features = CandidateFeatures(
+        customer_id=CUSTOMER_ID,
+        article_id=ARTICLE_2,
+        two_tower_retrieval_latest_customer_rank=1,
+        two_tower_retrieval_latest_customer_score=2.0,
+    )
+    weights = DeterministicRankerWeights(
+        two_tower_retrieval_presence_weight=0.0,
+        two_tower_retrieval_score_weight=0.0,
+        two_tower_retrieval_latest_customer_presence_weight=1.0,
+        two_tower_retrieval_latest_customer_score_weight=0.5,
+    )
+
+    assert score_candidate(latest_customer_features, weights) > score_candidate(
+        latest_features, weights
+    )
 
 
 def test_evaluate_deterministic_ranker_from_csv_reports_same_scope_delta(tmp_path: Path) -> None:
