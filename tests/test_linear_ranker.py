@@ -22,8 +22,11 @@ from hm_recsys.ranking.linear import (
 from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER
 from hm_recsys.retrieval.source_names import (
     MULTIMODAL_SIMILARITY_SOURCE,
+    RECENT_POPULARITY_1D_SOURCE,
+    RECENT_POPULARITY_3D_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE,
     TWO_TOWER_RETRIEVAL_SOURCE,
 )
 
@@ -48,6 +51,10 @@ def test_feature_vector_matches_schema() -> None:
         article_id=ARTICLE_1,
         repeat_rank=2,
         repeat_score=0.5,
+        recent_popularity_1d_rank=1,
+        recent_popularity_1d_score=1.0,
+        recent_popularity_3d_rank=2,
+        recent_popularity_3d_score=0.5,
         age_segment_popularity_rank=3,
         age_segment_popularity_score=0.7,
         garment_group_popularity_rank=4,
@@ -56,6 +63,8 @@ def test_feature_vector_matches_schema() -> None:
         content_similarity_score=0.8,
         two_tower_retrieval_rank=5,
         two_tower_retrieval_score=1.2,
+        two_tower_retrieval_latest_customer_rank=6,
+        two_tower_retrieval_latest_customer_score=0.7,
         source_count=1,
         best_rank=2,
     )
@@ -66,6 +75,10 @@ def test_feature_vector_matches_schema() -> None:
     assert vector[0] == 1.0
     assert vector[1] == 1.0
     assert vector[3] == pytest.approx(0.5)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_recent_popularity_1d")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("recent_popularity_1d_score")] == pytest.approx(1.0)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_recent_popularity_3d")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("recent_popularity_3d_score")] == pytest.approx(0.5)
     assert vector[LINEAR_FEATURE_NAMES.index("has_age_segment_popularity")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("age_segment_popularity_score")] == pytest.approx(0.7)
     assert vector[LINEAR_FEATURE_NAMES.index("has_garment_group_popularity")] == 1.0
@@ -76,6 +89,10 @@ def test_feature_vector_matches_schema() -> None:
     assert vector[LINEAR_FEATURE_NAMES.index("content_similarity_score")] == pytest.approx(0.8)
     assert vector[LINEAR_FEATURE_NAMES.index("has_two_tower_retrieval")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("two_tower_retrieval_score")] == pytest.approx(1.2)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_two_tower_retrieval_latest_customer")] == 1.0
+    assert vector[
+        LINEAR_FEATURE_NAMES.index("two_tower_retrieval_latest_customer_score")
+    ] == pytest.approx(0.7)
 
 
 def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
@@ -84,12 +101,18 @@ def test_train_and_evaluate_linear_ranker_from_csv(tmp_path: Path) -> None:
     rows = [
         (CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
         (CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0),
+        (CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_1D_SOURCE, 1, 1.0),
+        (CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_3D_SOURCE, 1, 1.0),
         (CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 1, 0.9),
         (CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_SOURCE, 1, 1.1),
+        (CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE, 1, 0.8),
         (SECOND_CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0),
         (SECOND_CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0),
+        (SECOND_CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_1D_SOURCE, 1, 1.0),
+        (SECOND_CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_3D_SOURCE, 1, 1.0),
         (SECOND_CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 1, 0.9),
         (SECOND_CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_SOURCE, 1, 1.1),
+        (SECOND_CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE, 1, 0.8),
     ]
     write_candidate_csv(train_path, rows)
     write_candidate_csv(eval_path, rows)
