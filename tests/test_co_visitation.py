@@ -69,6 +69,28 @@ def test_co_visitation_candidates_are_scored_by_neighbor_and_history_recency() -
     assert co_visitation_article_coverage(index, (CUSTOMER_ID,)) == 3
 
 
+def test_co_visitation_pair_counts_use_all_pre_cutoff_customer_histories() -> None:
+    split = TemporalSplit.from_isoformat("2020-01-10")
+    non_target_customer_id = "c" * 64
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 2), CUSTOMER_ID, ARTICLE_2),
+        TransactionEvent(date(2020, 1, 1), non_target_customer_id, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 2), non_target_customer_id, ARTICLE_3),
+    ]
+
+    index = build_co_visitation_index(
+        transactions=events,
+        split=split,
+        target_customer_ids=(CUSTOMER_ID,),
+        max_history_items=3,
+        max_neighbors_per_item=10,
+    )
+
+    assert non_target_customer_id not in index.customer_histories
+    assert ARTICLE_3 in build_co_visitation_candidates(index, CUSTOMER_ID, k=3)
+
+
 def test_co_visitation_rejects_invalid_configuration() -> None:
     split = TemporalSplit.from_isoformat("2020-01-08")
 
