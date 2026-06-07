@@ -52,6 +52,11 @@ from hm_recsys.ranking.deterministic_tuning import (
     tune_deterministic_ranker_from_csv,
     write_deterministic_ranker_tuning_report,
 )
+from hm_recsys.ranking.lightgbm_behavioral import (
+    LightGBMBehavioralRankerConfig,
+    evaluate_lightgbm_behavioral_ranker_from_csv,
+    write_lightgbm_behavioral_ranker_report,
+)
 from hm_recsys.ranking.linear import (
     LinearRankerConfig,
     build_learned_linear_ranker_report,
@@ -496,6 +501,56 @@ def build_parser() -> argparse.ArgumentParser:
     learned_ranker_parser.add_argument("--report-path", type=Path, default=None)
     learned_ranker_parser.set_defaults(handler=_handle_evaluate_learned_ranker_baseline)
 
+    lightgbm_ranker_parser = subparsers.add_parser(
+        "evaluate-lightgbm-behavioral-ranker",
+        help=(
+            "Train optional LightGBM LambdaRank on source plus cutoff-safe behavioral "
+            "features and evaluate a blended ranker. Requires local lightgbm."
+        ),
+    )
+    lightgbm_ranker_parser.add_argument(
+        "--cutoff", required=True, help="Evaluation cutoff date, YYYY-MM-DD."
+    )
+    lightgbm_ranker_parser.add_argument(
+        "--train-cutoff",
+        default=None,
+        help="Training-label cutoff. Defaults to previous non-overlapping window.",
+    )
+    lightgbm_ranker_parser.add_argument("--horizon-days", type=int, default=7)
+    lightgbm_ranker_parser.add_argument("--k", type=int, default=12)
+    lightgbm_ranker_parser.add_argument("--negative-per-positive", type=int, default=50)
+    lightgbm_ranker_parser.add_argument("--blend-lambda", type=float, default=0.75)
+    lightgbm_ranker_parser.add_argument("--num-boost-round", type=int, default=120)
+    lightgbm_ranker_parser.add_argument("--learning-rate", type=float, default=0.03)
+    lightgbm_ranker_parser.add_argument("--num-leaves", type=int, default=31)
+    lightgbm_ranker_parser.add_argument("--min-data-in-leaf", type=int, default=100)
+    lightgbm_ranker_parser.add_argument("--feature-fraction", type=float, default=0.9)
+    lightgbm_ranker_parser.add_argument("--bagging-fraction", type=float, default=0.9)
+    lightgbm_ranker_parser.add_argument("--bagging-freq", type=int, default=1)
+    lightgbm_ranker_parser.add_argument("--lambda-l2", type=float, default=5.0)
+    lightgbm_ranker_parser.add_argument("--seed", type=int, default=42)
+    lightgbm_ranker_parser.add_argument("--num-threads", type=int, default=4)
+    lightgbm_ranker_parser.add_argument("--chunk-customers", type=int, default=2000)
+    lightgbm_ranker_parser.add_argument(
+        "--max-train-customers",
+        type=int,
+        default=None,
+        help="Optional deterministic cap for training-label customers.",
+    )
+    lightgbm_ranker_parser.add_argument(
+        "--max-eval-customers",
+        type=int,
+        default=None,
+        help="Optional deterministic cap for evaluation-label customers.",
+    )
+    _add_two_tower_ranker_weight_arguments(lightgbm_ranker_parser)
+    lightgbm_ranker_parser.add_argument("--project-root", type=Path, default=None)
+    lightgbm_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    lightgbm_ranker_parser.add_argument("--train-candidate-path", type=Path, required=True)
+    lightgbm_ranker_parser.add_argument("--eval-candidate-path", type=Path, required=True)
+    lightgbm_ranker_parser.add_argument("--report-path", type=Path, default=None)
+    lightgbm_ranker_parser.set_defaults(handler=_handle_evaluate_lightgbm_behavioral_ranker)
+
     rolling_ranker_parser = subparsers.add_parser(
         "rolling-ranker-validation",
         help="Evaluate learned and deterministic rankers across rolling temporal windows.",
@@ -642,6 +697,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_age_segment_popularity_arguments(deterministic_submission_parser)
     _add_garment_group_popularity_arguments(deterministic_submission_parser)
+    _add_two_tower_candidate_arguments(deterministic_submission_parser)
+    _add_two_tower_ranker_weight_arguments(deterministic_submission_parser)
     deterministic_submission_parser.add_argument("--project-root", type=Path, default=None)
     deterministic_submission_parser.add_argument("--raw-data-dir", type=Path, default=None)
     deterministic_submission_parser.add_argument(
@@ -2160,6 +2217,88 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _handle_evaluate_lightgbm_behavioral_ranker(args: argparse.Namespace) -> int:
+    """Handle the ``evaluate-lightgbm-behavioral-ranker`` subcommand."""
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    evaluation_split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
+    train_split = (
+        TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
+        if args.train_cutoff is not None
+        else previous_window_split(evaluation_split)
+    )
+    if train_split.validation_end > evaluation_split.cutoff:
+        raise ValueError("training label window must end before the evaluation cutoff")
+
+    train_candidate_path = _resolve_path_under_root(paths, args.train_candidate_path)
+    eval_candidate_path = _resolve_path_under_root(paths, args.eval_candidate_path)
+    report_path = args.report_path or _lightgbm_behavioral_ranker_report_path(paths, args)
+    report_path = _resolve_path_under_root(paths, report_path)
+
+    submission_customer_ids = load_submission_customer_ids(paths.raw_data_dir)
+    train_labels = _validation_labels_for_split(
+        raw_data_dir=paths.raw_data_dir,
+        split=train_split,
+        submission_customer_ids=submission_customer_ids,
+        max_target_customers=args.max_train_customers,
+    )
+    eval_labels = _validation_labels_for_split(
+        raw_data_dir=paths.raw_data_dir,
+        split=evaluation_split,
+        submission_customer_ids=submission_customer_ids,
+        max_target_customers=args.max_eval_customers,
+    )
+    config = LightGBMBehavioralRankerConfig(
+        k=args.k,
+        negative_per_positive=args.negative_per_positive,
+        blend_lambda=args.blend_lambda,
+        num_boost_round=args.num_boost_round,
+        learning_rate=args.learning_rate,
+        num_leaves=args.num_leaves,
+        min_data_in_leaf=args.min_data_in_leaf,
+        feature_fraction=args.feature_fraction,
+        bagging_fraction=args.bagging_fraction,
+        bagging_freq=args.bagging_freq,
+        lambda_l2=args.lambda_l2,
+        seed=args.seed,
+        num_threads=args.num_threads,
+        chunk_customers=args.chunk_customers,
+        deterministic_weights=_lightgbm_behavioral_ranker_weights_from_args(args),
+    )
+    report = evaluate_lightgbm_behavioral_ranker_from_csv(
+        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        train_split=train_split,
+        evaluation_split=evaluation_split,
+        train_candidate_path=train_candidate_path,
+        evaluation_candidate_path=eval_candidate_path,
+        train_validation_labels=train_labels,
+        evaluation_validation_labels=eval_labels,
+        config=config,
+    )
+    written_report_path = write_lightgbm_behavioral_ranker_report(report, report_path)
+
+    print(f"Training cutoff: {report.train_cutoff}")
+    print(f"Training label end exclusive: {report.train_validation_end_exclusive}")
+    print(f"Evaluation cutoff: {report.evaluation_cutoff}")
+    print(f"Evaluation end exclusive: {report.evaluation_end_exclusive}")
+    print(f"Training pairs: {report.train_unique_candidate_pairs}")
+    print(f"Training positives: {report.train_positive_pairs}")
+    print(f"Evaluation pairs: {report.evaluation_unique_candidate_pairs}")
+    print(f"Evaluated customers: {report.evaluated_customers}")
+    print(f"Deterministic MAP@{config.k}: {report.deterministic_map_at_k:.8f}")
+    print(f"LightGBM-only MAP@{config.k}: {report.model_only_map_at_k:.8f}")
+    print(f"Blend MAP@{config.k}: {report.blend_map_at_k:.8f}")
+    print(
+        f"Delta blend vs deterministic MAP@{config.k}: "
+        f"{report.delta_vs_deterministic_map_at_k:.8f}"
+    )
+    print(f"Blend recall@{config.k}: {report.blend_recall_at_k:.8f}")
+    print(f"Train candidate CSV: {train_candidate_path}")
+    print(f"Eval candidate CSV: {eval_candidate_path}")
+    print(f"LightGBM behavioral ranker report written to: {written_report_path}")
+    return 0
+
+
 def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
     """Handle the ``rolling-ranker-validation`` subcommand.
 
@@ -2671,6 +2810,8 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         candidate_path=train_candidate_path,
         validation_labels=train_labels,
         k=args.k,
+        grid=_deterministic_tuning_grid_from_args(args),
+        default_weights=_deterministic_ranker_weights_from_args(args),
         top_n=args.top_trials,
     )
 
@@ -2678,11 +2819,13 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         "Generating final-data deterministic-ranker predictions for "
         f"{len(target_customer_ids)} customers. include_co_visitation={not args.no_co_visitation}, "
         f"include_age_segment={args.include_age_segment_popularity}, "
-        f"include_garment_group={args.include_garment_group_popularity}",
+        f"include_garment_group={args.include_garment_group_popularity}, "
+        f"include_two_tower={args.include_two_tower_retrieval}",
         flush=True,
     )
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    final_two_tower_model = _train_two_tower_candidate_model_if_enabled(paths, final_split, args)
     submission = build_deterministic_ranker_submission_predictions(
         transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
         split=final_split,
@@ -2702,6 +2845,9 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         article_garment_group_by_id=article_garment_groups,
         garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
         garment_group_max_history_items=args.garment_group_max_history_items,
+        two_tower_model=final_two_tower_model,
+        two_tower_source_name=args.two_tower_source_name,
+        two_tower_max_retrieval_articles=args.two_tower_max_retrieval_articles,
         max_transaction_date=max_transaction_date,
         transaction_progress_interval=5_000_000,
         transaction_progress_callback=lambda phase, rows: print(
@@ -2756,6 +2902,13 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_two_tower_retrieval=args.include_two_tower_retrieval,
+        two_tower_source_name=(
+            args.two_tower_source_name if args.include_two_tower_retrieval else None
+        ),
+        two_tower_max_retrieval_articles=(
+            args.two_tower_max_retrieval_articles if args.include_two_tower_retrieval else None
         ),
         weight_selection=weight_selection,
         submission=submission,
@@ -3304,6 +3457,67 @@ def _deterministic_ranker_weights_from_args(
     if not updates:
         return DEFAULT_DETERMINISTIC_RANKER_WEIGHTS
     return replace(DEFAULT_DETERMINISTIC_RANKER_WEIGHTS, **updates)
+
+
+def _lightgbm_behavioral_ranker_weights_from_args(
+    args: argparse.Namespace,
+) -> DeterministicRankerWeights:
+    """Return the deterministic prior weights used by the behavioral GBDT blend.
+
+    These defaults mirror the best full-validation diagnostic prior used before
+    adding behavioral features. The LightGBM score is blended with this prior;
+    the prior itself is not selected on the evaluation labels.
+    """
+
+    weights = replace(
+        DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
+        repeat_presence_weight=3.0,
+        repeat_score_weight=1.0,
+        recent_popularity_presence_weight=0.0,
+        age_segment_popularity_presence_weight=0.45,
+        age_segment_popularity_score_weight=0.1,
+        garment_group_popularity_presence_weight=0.8,
+        garment_group_popularity_score_weight=0.55,
+        co_visitation_presence_weight=1.0,
+        co_visitation_score_weight=0.0,
+        source_count_weight=0.15,
+        best_rank_score_weight=0.0,
+        two_tower_retrieval_presence_weight=1.5,
+        two_tower_retrieval_score_weight=0.0,
+        two_tower_retrieval_rank_weight=0.0,
+        two_tower_retrieval_latest_customer_presence_weight=1.0,
+        two_tower_retrieval_latest_customer_score_weight=0.0,
+        two_tower_retrieval_latest_customer_rank_weight=1.0,
+    )
+    updates: dict[str, float] = {}
+    two_tower_presence_weight = getattr(args, "two_tower_ranker_presence_weight", None)
+    if two_tower_presence_weight is not None:
+        updates["two_tower_retrieval_presence_weight"] = two_tower_presence_weight
+    two_tower_score_weight = getattr(args, "two_tower_ranker_score_weight", None)
+    if two_tower_score_weight is not None:
+        updates["two_tower_retrieval_score_weight"] = two_tower_score_weight
+    if updates:
+        return replace(weights, **updates)
+    return weights
+
+
+def _lightgbm_behavioral_ranker_report_path(
+    paths: ProjectPaths,
+    args: argparse.Namespace,
+) -> Path:
+    train_cutoff = args.train_cutoff or "previous"
+    name = (
+        "lightgbm_behavioral_ranker_"
+        f"train_{train_cutoff.replace('-', '_')}_"
+        f"eval_{args.cutoff.replace('-', '_')}_"
+        f"k_{args.k}_neg{args.negative_per_positive}_"
+        f"lambda{_float_slug(args.blend_lambda)}"
+    )
+    if args.max_train_customers is not None:
+        name = f"{name}_train_first_{args.max_train_customers}"
+    if args.max_eval_customers is not None:
+        name = f"{name}_eval_first_{args.max_eval_customers}"
+    return paths.artifacts_dir / "ranker-baselines" / f"{name}.json"
 
 
 def _deterministic_tuning_grid_from_args(
