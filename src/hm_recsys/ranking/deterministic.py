@@ -76,10 +76,13 @@ class DeterministicRankerWeights:
         content_similarity_score_weight: Weight for content cosine/source score.
         two_tower_retrieval_presence_weight: Additive weight for two-tower retrieval.
         two_tower_retrieval_score_weight: Weight for two-tower retrieval score.
+        two_tower_retrieval_rank_weight: Weight for reciprocal two-tower rank.
         two_tower_retrieval_latest_customer_presence_weight: Additive weight for the
             broader latest-positive-per-customer two-tower source.
         two_tower_retrieval_latest_customer_score_weight: Score weight for the
             broader latest-positive-per-customer two-tower source.
+        two_tower_retrieval_latest_customer_rank_weight: Weight for reciprocal rank
+            from broader latest-positive-per-customer two-tower retrieval.
         source_count_weight: Weight for the number of sources emitting the pair.
         best_rank_score_weight: Weight for reciprocal best source rank.
     """
@@ -104,8 +107,10 @@ class DeterministicRankerWeights:
     content_similarity_score_weight: float = 0.05
     two_tower_retrieval_presence_weight: float = 0.10
     two_tower_retrieval_score_weight: float = 0.05
+    two_tower_retrieval_rank_weight: float = 0.0
     two_tower_retrieval_latest_customer_presence_weight: float = 0.10
     two_tower_retrieval_latest_customer_score_weight: float = 0.05
+    two_tower_retrieval_latest_customer_rank_weight: float = 0.0
     source_count_weight: float = 0.05
     best_rank_score_weight: float = 0.05
 
@@ -497,11 +502,17 @@ def score_candidate(
     if features.has_two_tower_retrieval:
         score += weights.two_tower_retrieval_presence_weight
         score += weights.two_tower_retrieval_score_weight * features.two_tower_retrieval_score
+        score += weights.two_tower_retrieval_rank_weight * _rank_reciprocal(
+            features.two_tower_retrieval_rank
+        )
     if features.has_two_tower_retrieval_latest_customer:
         score += weights.two_tower_retrieval_latest_customer_presence_weight
         score += (
             weights.two_tower_retrieval_latest_customer_score_weight
             * features.two_tower_retrieval_latest_customer_score
+        )
+        score += weights.two_tower_retrieval_latest_customer_rank_weight * _rank_reciprocal(
+            features.two_tower_retrieval_latest_customer_rank
         )
     return score
 
@@ -717,6 +728,14 @@ def _min_optional_rank(current: int | None, candidate: int) -> int:
     """Return the minimum rank while supporting an initially missing value."""
 
     return candidate if current is None else min(current, candidate)
+
+
+def _rank_reciprocal(rank: int | None) -> float:
+    """Return reciprocal rank with safe handling for missing/invalid ranks."""
+
+    if rank is None or rank <= 0:
+        return 0.0
+    return 1.0 / float(rank)
 
 
 def _mean_recall_at_k(
