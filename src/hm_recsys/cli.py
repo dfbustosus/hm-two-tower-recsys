@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import date, timedelta
@@ -383,6 +384,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Number of top tuning-window weight trials to retain in the report.",
+    )
+    tuned_ranker_parser.add_argument(
+        "--research-weight-grid",
+        action="store_true",
+        help=(
+            "Use a broader fast in-memory grid over repeat, recent popularity, "
+            "co-visitation, metadata, and two-tower rank weights."
+        ),
     )
     tuned_ranker_parser.add_argument(
         "--no-co-visitation",
@@ -3308,6 +3317,8 @@ def _deterministic_tuning_grid_from_args(
     previous non-overlapping label window rather than on the evaluation window.
     """
 
+    if getattr(args, "research_weight_grid", False):
+        return _research_deterministic_tuning_grid(args)
     if not getattr(args, "include_two_tower_retrieval", False):
         return DEFAULT_DETERMINISTIC_RANKER_TUNING_GRID
     base_weights = _deterministic_ranker_weights_from_args(args)
@@ -3326,8 +3337,53 @@ def _deterministic_tuning_grid_from_args(
         best_rank_score_weights=(base_weights.best_rank_score_weight,),
         two_tower_retrieval_presence_weights=(0.10, 0.30, 0.60, 1.00),
         two_tower_retrieval_score_weights=(0.05, 0.15, 0.30),
+        two_tower_retrieval_rank_weights=(base_weights.two_tower_retrieval_rank_weight,),
         two_tower_retrieval_latest_customer_presence_weights=(0.0, 0.30, 0.60, 1.00),
         two_tower_retrieval_latest_customer_score_weights=(0.0, 0.05),
+        two_tower_retrieval_latest_customer_rank_weights=(
+            base_weights.two_tower_retrieval_latest_customer_rank_weight,
+        ),
+    )
+
+
+def _research_deterministic_tuning_grid(args: argparse.Namespace) -> DeterministicRankerTuningGrid:
+    """Return a compact high-signal grid for fast ranker research loops."""
+
+    base_weights = _deterministic_ranker_weights_from_args(args)
+    two_tower_presence_weights: tuple[float, ...] = (
+        base_weights.two_tower_retrieval_presence_weight,
+    )
+    two_tower_rank_weights: tuple[float, ...] = (base_weights.two_tower_retrieval_rank_weight,)
+    latest_customer_presence_weights: tuple[float, ...] = (
+        base_weights.two_tower_retrieval_latest_customer_presence_weight,
+    )
+    latest_customer_rank_weights: tuple[float, ...] = (
+        base_weights.two_tower_retrieval_latest_customer_rank_weight,
+    )
+    if getattr(args, "include_two_tower_retrieval", False):
+        two_tower_presence_weights = (1.5,)
+        two_tower_rank_weights = (0.0,)
+        latest_customer_presence_weights = (1.0,)
+        latest_customer_rank_weights = (0.0, 1.0)
+    return DeterministicRankerTuningGrid(
+        repeat_presence_weights=(2.5, 3.0, 3.5),
+        repeat_score_weights=(0.5, 1.0),
+        recent_popularity_presence_weights=(0.0, 0.25),
+        recent_popularity_score_weights=(base_weights.recent_popularity_score_weight,),
+        co_visitation_presence_weights=(1.0, 1.5),
+        co_visitation_score_weights=(0.0,),
+        garment_group_popularity_presence_weights=(0.8,),
+        garment_group_popularity_score_weights=(0.55,),
+        age_segment_popularity_presence_weights=(0.45,),
+        age_segment_popularity_score_weights=(0.1,),
+        source_count_weights=(0.15,),
+        best_rank_score_weights=(0.0,),
+        two_tower_retrieval_presence_weights=two_tower_presence_weights,
+        two_tower_retrieval_score_weights=(0.0,),
+        two_tower_retrieval_rank_weights=two_tower_rank_weights,
+        two_tower_retrieval_latest_customer_presence_weights=latest_customer_presence_weights,
+        two_tower_retrieval_latest_customer_score_weights=(0.0,),
+        two_tower_retrieval_latest_customer_rank_weights=latest_customer_rank_weights,
     )
 
 
@@ -3516,6 +3572,23 @@ def _write_cached_ranker_candidate_export(
         paths, paths.candidate_export_report_path(output_path)
     )
     if output_path.exists() and candidate_report_path.exists():
+        cache[output_path] = candidate_report_path
+        return candidate_report_path
+    if output_path.exists():
+        candidate_report_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate_report_path.write_text(
+            json.dumps(
+                {
+                    "output_path": str(output_path),
+                    "reused_existing_candidate_csv": True,
+                    "summary": "Existing candidate CSV reused for fast ranker tuning.",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         cache[output_path] = candidate_report_path
         return candidate_report_path
 
