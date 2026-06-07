@@ -82,6 +82,7 @@ INCLUDE_GARMENT_GROUP_POPULARITY ?=
 GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS ?=
 GARMENT_GROUP_MAX_HISTORY_ITEMS ?= 8
 DETERMINISTIC_TUNING_TOP_TRIALS ?= 10
+DETERMINISTIC_TUNING_RESEARCH_GRID ?=
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
@@ -341,6 +342,9 @@ deterministic-ranker-tuning: venv
 	fi; \
 	if [[ -n "$(TWO_TOWER_RANKER_SCORE_WEIGHT)" ]]; then \
 		extra_args="$$extra_args --two-tower-ranker-score-weight $(TWO_TOWER_RANKER_SCORE_WEIGHT)"; \
+	fi; \
+	if [[ -n "$(DETERMINISTIC_TUNING_RESEARCH_GRID)" ]]; then \
+		extra_args="$$extra_args --research-weight-grid"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli tune-deterministic-ranker --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" --top-trials "$(DETERMINISTIC_TUNING_TOP_TRIALS)" $$extra_args
 
