@@ -199,11 +199,76 @@ def test_two_tower_export_reports_skipped_negatives_when_pool_is_empty(tmp_path:
     assert summary.skipped_negative_examples == 1
 
 
+def test_two_tower_export_supports_popularity_weighted_negatives(tmp_path: Path) -> None:
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 1), SECOND_CUSTOMER_ID, ARTICLE_2),
+        TransactionEvent(date(2020, 1, 2), SECOND_CUSTOMER_ID, ARTICLE_2),
+        TransactionEvent(date(2020, 1, 3), SECOND_CUSTOMER_ID, ARTICLE_2),
+        TransactionEvent(date(2020, 1, 4), THIRD_CUSTOMER_ID, ARTICLE_3),
+        TransactionEvent(date(2020, 1, 8), VALIDATION_CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
+    ]
+    paths = export_paths(tmp_path)
+
+    summary = write_two_tower_example_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=TemporalSplit.from_isoformat("2020-01-08"),
+        examples_path=paths["examples"],
+        customer_mapping_path=paths["customers"],
+        article_mapping_path=paths["articles"],
+        config=TwoTowerExampleExportConfig(
+            negatives_per_positive=2,
+            seed=42,
+            negative_sampling="popularity",
+            max_positive_examples=1,
+        ),
+    )
+
+    negative_rows = [row for row in read_dict_rows(paths["examples"]) if row["label"] == "0"]
+    assert summary.negative_sampling == "popularity"
+    assert all(row["example_type"] == "popularity_negative" for row in negative_rows)
+    assert all(row["article_id"] != ARTICLE_1 for row in negative_rows)
+    assert VALIDATION_ONLY_ARTICLE not in {row["article_id"] for row in negative_rows}
+
+
+def test_two_tower_export_mixed_negatives_alternate_popularity_and_random(
+    tmp_path: Path,
+) -> None:
+    events = [
+        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
+        TransactionEvent(date(2020, 1, 1), SECOND_CUSTOMER_ID, ARTICLE_2),
+        TransactionEvent(date(2020, 1, 2), THIRD_CUSTOMER_ID, ARTICLE_3),
+    ]
+    paths = export_paths(tmp_path)
+
+    write_two_tower_example_export(
+        transaction_iter_factory=lambda: iter(events),
+        split=TemporalSplit.from_isoformat("2020-01-08"),
+        examples_path=paths["examples"],
+        customer_mapping_path=paths["customers"],
+        article_mapping_path=paths["articles"],
+        config=TwoTowerExampleExportConfig(
+            negatives_per_positive=2,
+            seed=42,
+            negative_sampling="mixed",
+            max_positive_examples=1,
+        ),
+    )
+
+    negative_types = [
+        row["example_type"] for row in read_dict_rows(paths["examples"]) if row["label"] == "0"
+    ]
+    assert negative_types == ["popularity_negative", "random_negative"]
+
+
 def test_two_tower_export_rejects_invalid_config(tmp_path: Path) -> None:
     paths = export_paths(tmp_path)
 
     with pytest.raises(ValueError, match="negatives_per_positive"):
         TwoTowerExampleExportConfig(negatives_per_positive=-1)
+
+    with pytest.raises(ValueError, match="unsupported negative_sampling"):
+        TwoTowerExampleExportConfig(negative_sampling="bad")  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="progress_interval"):
         write_two_tower_example_export(
