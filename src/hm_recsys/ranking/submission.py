@@ -44,6 +44,8 @@ from hm_recsys.retrieval.segment_popularity import (
     DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
     build_age_segment_popularity_index,
 )
+from hm_recsys.retrieval.source_names import TWO_TOWER_RETRIEVAL_SOURCE
+from hm_recsys.training.two_tower_retrieval import TwoTowerSmokeModel
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,9 @@ class DeterministicRankerSubmissionReport:
         include_garment_group_popularity: Whether garment-group source rows were used.
         garment_group_popularity_lookback_days: Garment-group source lookback.
         garment_group_max_history_items: History length used for garment affinities.
+        include_two_tower_retrieval: Whether two-tower retrieval rows were used.
+        two_tower_source_name: Source label used for two-tower retrieval rows.
+        two_tower_max_retrieval_articles: Exact-scoring article-pool cap for two-tower retrieval.
         weight_selection: Leakage-safe tuning-window weight selection diagnostics.
         weights: Selected deterministic weights used for final scoring.
         submission: Final prediction diagnostics.
@@ -202,6 +207,9 @@ class DeterministicRankerSubmissionReport:
     include_garment_group_popularity: bool
     garment_group_popularity_lookback_days: int | None
     garment_group_max_history_items: int | None
+    include_two_tower_retrieval: bool
+    two_tower_source_name: str | None
+    two_tower_max_retrieval_articles: int | None
     weight_selection: DeterministicRankerWeightSelection
     weights: DeterministicRankerWeights
     submission: LinearRankerSubmissionDiagnostics
@@ -383,6 +391,9 @@ def build_deterministic_ranker_submission_predictions(
     article_garment_group_by_id: dict[str, str] | None = None,
     garment_group_popularity_lookback_days: int | None = None,
     garment_group_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    two_tower_model: TwoTowerSmokeModel | None = None,
+    two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
+    two_tower_max_retrieval_articles: int | None = 5000,
     max_transaction_date: date | None = None,
     transaction_progress_interval: int | None = None,
     transaction_progress_callback: Callable[[str, int], None] | None = None,
@@ -432,6 +443,10 @@ def build_deterministic_ranker_submission_predictions(
     )
     if resolved_garment_group_lookback_days <= 0:
         raise ValueError("garment_group_popularity_lookback_days must be positive")
+    if two_tower_model is not None and not two_tower_source_name:
+        raise ValueError("two_tower_source_name must not be empty")
+    if two_tower_max_retrieval_articles is not None and two_tower_max_retrieval_articles <= 0:
+        raise ValueError("two_tower_max_retrieval_articles must be positive when provided")
 
     started_at = perf_counter()
     target_customer_tuple = tuple(target_customer_ids)
@@ -518,6 +533,9 @@ def build_deterministic_ranker_submission_predictions(
                 co_visitation_index=co_visitation_index,
                 age_segment_index=age_segment_index,
                 garment_group_index=garment_group_index,
+                two_tower_model=two_tower_model,
+                two_tower_source_name=two_tower_source_name,
+                two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
                 k=candidate_k,
             )
         )
@@ -656,6 +674,9 @@ def build_deterministic_ranker_submission_report(
     include_garment_group_popularity: bool,
     garment_group_popularity_lookback_days: int | None,
     garment_group_max_history_items: int | None,
+    include_two_tower_retrieval: bool,
+    two_tower_source_name: str | None,
+    two_tower_max_retrieval_articles: int | None,
     weight_selection: DeterministicRankerWeightSelection,
     submission: DeterministicRankerSubmissionPredictions,
     submission_path: Path | str,
@@ -683,6 +704,11 @@ def build_deterministic_ranker_submission_report(
         include_garment_group_popularity=include_garment_group_popularity,
         garment_group_popularity_lookback_days=garment_group_popularity_lookback_days,
         garment_group_max_history_items=garment_group_max_history_items,
+        include_two_tower_retrieval=include_two_tower_retrieval,
+        two_tower_source_name=two_tower_source_name if include_two_tower_retrieval else None,
+        two_tower_max_retrieval_articles=(
+            two_tower_max_retrieval_articles if include_two_tower_retrieval else None
+        ),
         weight_selection=weight_selection,
         weights=submission.weights,
         submission=submission.diagnostics,
