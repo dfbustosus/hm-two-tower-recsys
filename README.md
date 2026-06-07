@@ -416,6 +416,24 @@ The tuning grid and selected weights are written to an ignored JSON report under
 `artifacts/ranker-baselines/`. Treat the selected weights as a challenger until
 they improve rolling validation, not just one latest-week split.
 
+For faster research iteration, enable the compact high-signal in-memory grid.
+This broadens tuning over repeat, recent-popularity, co-visitation, metadata, and
+two-tower rank weights while reusing existing candidate CSVs when present:
+
+```bash
+make deterministic-ranker-tuning \
+  CUTOFF=2020-09-16 \
+  RANKER_CANDIDATE_K=100 \
+  RANKER_MAX_TARGET_CUSTOMERS=10000 \
+  INCLUDE_AGE_SEGMENT_POPULARITY=1 \
+  INCLUDE_GARMENT_GROUP_POPULARITY=1 \
+  INCLUDE_TWO_TOWER_RETRIEVAL=1 \
+  DETERMINISTIC_TUNING_RESEARCH_GRID=1
+```
+
+Use this for hypothesis triage; promote only after applying selected weights to
+full validation and checking rolling windows.
+
 To include the two-tower retrieval challenger in deterministic ranker evaluation,
 first export cutoff-safe two-tower examples for the target cutoff, then enable
 the source when running the ranker. Two-tower rows are scored with their own
