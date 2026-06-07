@@ -12,8 +12,10 @@ from hm_recsys.ranking.deterministic_tuning import (
 )
 from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER
 from hm_recsys.retrieval.source_names import (
+    CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
+    REPEAT_SOURCE,
     TWO_TOWER_RETRIEVAL_SOURCE,
 )
 
@@ -122,6 +124,43 @@ def test_tuning_grid_can_select_two_tower_weights(tmp_path: Path) -> None:
     assert report.selected_weights.two_tower_retrieval_presence_weight == 3.0
 
 
+def test_tuning_grid_can_select_core_source_weights(tmp_path: Path) -> None:
+    train_path = tmp_path / "train_candidates.csv"
+    eval_path = tmp_path / "eval_candidates.csv"
+    _write_candidates_with_core_sources(train_path)
+    _write_candidates_with_core_sources(eval_path)
+    grid = DeterministicRankerTuningGrid(
+        repeat_presence_weights=(0.0, 3.0),
+        repeat_score_weights=(0.0,),
+        recent_popularity_presence_weights=(0.0,),
+        recent_popularity_score_weights=(0.0,),
+        co_visitation_presence_weights=(0.0, 2.0),
+        co_visitation_score_weights=(0.0,),
+        garment_group_popularity_presence_weights=(0.0,),
+        garment_group_popularity_score_weights=(0.0,),
+        age_segment_popularity_presence_weights=(0.0,),
+        age_segment_popularity_score_weights=(0.0,),
+        source_count_weights=(0.0,),
+        best_rank_score_weights=(0.0,),
+    )
+
+    report = tune_deterministic_ranker_from_csv(
+        train_candidate_path=train_path,
+        train_validation_labels={CUSTOMER_ID: (ARTICLE_TWO_TOWER,)},
+        train_split=TemporalSplit.from_isoformat("2020-09-09"),
+        evaluation_candidate_path=eval_path,
+        evaluation_validation_labels={CUSTOMER_ID: (ARTICLE_TWO_TOWER,)},
+        evaluation_split=TemporalSplit.from_isoformat("2020-09-16"),
+        k=1,
+        candidate_k=2,
+        grid=grid,
+    )
+
+    assert report.trial_count == 4
+    assert report.selected_evaluation.map_at_k == 1.0
+    assert report.selected_weights.co_visitation_presence_weight == 2.0
+
+
 def test_tuning_grid_rejects_invalid_values() -> None:
     with pytest.raises(ValueError, match="must contain at least one value"):
         DeterministicRankerTuningGrid(garment_group_popularity_presence_weights=())
@@ -158,3 +197,11 @@ def _write_candidates_with_two_tower(path: Path) -> None:
         writer.writerow(CANDIDATE_EXPORT_HEADER)
         writer.writerow((CUSTOMER_ID, ARTICLE_POPULAR, RECENT_POPULARITY_SOURCE, 1, 1.0))
         writer.writerow((CUSTOMER_ID, ARTICLE_TWO_TOWER, TWO_TOWER_RETRIEVAL_SOURCE, 1, 1.0))
+
+
+def _write_candidates_with_core_sources(path: Path) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(CANDIDATE_EXPORT_HEADER)
+        writer.writerow((CUSTOMER_ID, ARTICLE_POPULAR, REPEAT_SOURCE, 1, 1.0))
+        writer.writerow((CUSTOMER_ID, ARTICLE_TWO_TOWER, CO_VISITATION_SOURCE, 1, 1.0))
