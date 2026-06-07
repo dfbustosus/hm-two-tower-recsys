@@ -35,6 +35,7 @@ ROLLING_RANKER_LEARNING_RATE ?= 0.01
 ROLLING_RANKER_L2 ?= 0.001
 ROLLING_RANKER_NO_CO_VISITATION ?=
 TWO_TOWER_NEGATIVES_PER_POSITIVE ?= 1
+TWO_TOWER_NEGATIVE_SAMPLING ?= random
 TWO_TOWER_SEED ?= 42
 TWO_TOWER_MAX_POSITIVE_EXAMPLES ?= 100000
 TWO_TOWER_POSITIVE_SELECTION ?= latest
@@ -43,6 +44,7 @@ TWO_TOWER_EPOCHS ?= 3
 TWO_TOWER_LEARNING_RATE ?= 0.05
 TWO_TOWER_L2 ?= 0.0
 TWO_TOWER_LOSS ?= logistic
+TWO_TOWER_LOGQ_CORRECTION_ALPHA ?= 0.0
 TWO_TOWER_POSITIVE_RECENCY_HALF_LIFE_DAYS ?=
 TWO_TOWER_MAX_TRAINING_EXAMPLES ?=
 TWO_TOWER_MAX_EVAL_CUSTOMERS ?= 1000
@@ -280,7 +282,7 @@ candidate-export: venv
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
-		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-negative-sampling $(TWO_TOWER_NEGATIVE_SAMPLING) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-logq-correction-alpha $(TWO_TOWER_LOGQ_CORRECTION_ALPHA) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli export-candidates --cutoff "$(CUTOFF)" --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --k "$(CANDIDATE_K)" $$extra_args
 
@@ -303,7 +305,7 @@ ranker-baseline: venv
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
-		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-negative-sampling $(TWO_TOWER_NEGATIVE_SAMPLING) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-logq-correction-alpha $(TWO_TOWER_LOGQ_CORRECTION_ALPHA) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
 	fi; \
 	if [[ -n "$(TWO_TOWER_RANKER_PRESENCE_WEIGHT)" ]]; then \
 		extra_args="$$extra_args --two-tower-ranker-presence-weight $(TWO_TOWER_RANKER_PRESENCE_WEIGHT)"; \
@@ -332,7 +334,7 @@ deterministic-ranker-tuning: venv
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
 	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
-		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-negative-sampling $(TWO_TOWER_NEGATIVE_SAMPLING) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-logq-correction-alpha $(TWO_TOWER_LOGQ_CORRECTION_ALPHA) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
 	fi; \
 	if [[ -n "$(TWO_TOWER_RANKER_PRESENCE_WEIGHT)" ]]; then \
 		extra_args="$$extra_args --two-tower-ranker-presence-weight $(TWO_TOWER_RANKER_PRESENCE_WEIGHT)"; \
@@ -431,7 +433,7 @@ two-tower-example-export: venv
 	if [[ -n "$(TWO_TOWER_MAX_POSITIVE_EXAMPLES)" ]]; then \
 		extra_args="$$extra_args --max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES)"; \
 	fi; \
-	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" $$extra_args
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --negative-sampling "$(TWO_TOWER_NEGATIVE_SAMPLING)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" $$extra_args
 
 two-tower-retrieval-smoke: venv
 	@if [[ -z "$(CUTOFF)" ]]; then printf "CUTOFF is required, e.g. make two-tower-retrieval-smoke CUTOFF=2020-09-16\n"; exit 2; fi
@@ -458,8 +460,8 @@ two-tower-retrieval-smoke: venv
 	if [[ -n "$(TWO_TOWER_POPULARITY_PRIOR_WEIGHT)" ]]; then \
 		eval_args="$$eval_args --popularity-prior-weight $(TWO_TOWER_POPULARITY_PRIOR_WEIGHT) --popularity-prior-lookback-days $(TWO_TOWER_POPULARITY_PRIOR_LOOKBACK_DAYS)"; \
 	fi; \
-	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" $$export_args; \
-	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-two-tower-retrieval --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" --embedding-dim "$(TWO_TOWER_EMBEDDING_DIM)" --epochs "$(TWO_TOWER_EPOCHS)" --learning-rate "$(TWO_TOWER_LEARNING_RATE)" --l2 "$(TWO_TOWER_L2)" --loss "$(TWO_TOWER_LOSS)" $$eval_args
+	"$(VENV_PYTHON)" -m hm_recsys.cli export-two-tower-examples --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --negative-sampling "$(TWO_TOWER_NEGATIVE_SAMPLING)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" $$export_args; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli evaluate-two-tower-retrieval --cutoff "$(CUTOFF)" --negatives-per-positive "$(TWO_TOWER_NEGATIVES_PER_POSITIVE)" --negative-sampling "$(TWO_TOWER_NEGATIVE_SAMPLING)" --seed "$(TWO_TOWER_SEED)" --positive-selection "$(TWO_TOWER_POSITIVE_SELECTION)" --embedding-dim "$(TWO_TOWER_EMBEDDING_DIM)" --epochs "$(TWO_TOWER_EPOCHS)" --learning-rate "$(TWO_TOWER_LEARNING_RATE)" --l2 "$(TWO_TOWER_L2)" --loss "$(TWO_TOWER_LOSS)" --logq-correction-alpha "$(TWO_TOWER_LOGQ_CORRECTION_ALPHA)" $$eval_args
 
 kaggle-submit: venv
 	@if [[ -z "$(SUBMISSION)" ]]; then printf "SUBMISSION is required, e.g. make kaggle-submit SUBMISSION=submissions/file.csv\n"; exit 2; fi
