@@ -419,6 +419,15 @@ deterministic-ranker-submission: venv
 	if [[ -n "$(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)" ]]; then \
 		extra_args="$$extra_args --garment-group-popularity-lookback-days $(GARMENT_GROUP_POPULARITY_LOOKBACK_DAYS)"; \
 	fi; \
+	if [[ -n "$(INCLUDE_TWO_TOWER_RETRIEVAL)" ]]; then \
+		extra_args="$$extra_args --include-two-tower-retrieval --two-tower-negatives-per-positive $(TWO_TOWER_NEGATIVES_PER_POSITIVE) --two-tower-negative-sampling $(TWO_TOWER_NEGATIVE_SAMPLING) --two-tower-seed $(TWO_TOWER_SEED) --two-tower-positive-selection $(TWO_TOWER_POSITIVE_SELECTION) --two-tower-max-positive-examples $(TWO_TOWER_MAX_POSITIVE_EXAMPLES) --two-tower-embedding-dim $(TWO_TOWER_EMBEDDING_DIM) --two-tower-epochs $(TWO_TOWER_EPOCHS) --two-tower-learning-rate $(TWO_TOWER_LEARNING_RATE) --two-tower-l2 $(TWO_TOWER_L2) --two-tower-loss $(TWO_TOWER_LOSS) --two-tower-logq-correction-alpha $(TWO_TOWER_LOGQ_CORRECTION_ALPHA) --two-tower-max-retrieval-articles $(TWO_TOWER_MAX_RETRIEVAL_ARTICLES)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_RANKER_PRESENCE_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --two-tower-ranker-presence-weight $(TWO_TOWER_RANKER_PRESENCE_WEIGHT)"; \
+	fi; \
+	if [[ -n "$(TWO_TOWER_RANKER_SCORE_WEIGHT)" ]]; then \
+		extra_args="$$extra_args --two-tower-ranker-score-weight $(TWO_TOWER_RANKER_SCORE_WEIGHT)"; \
+	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli generate-deterministic-ranker-submission --popularity-lookback-days "$(BASELINE_LOOKBACK_DAYS)" --candidate-k "$(RANKER_CANDIDATE_K)" --k "$(RANKER_K)" --top-trials "$(DETERMINISTIC_TUNING_TOP_TRIALS)" $$extra_args
 
 learned-ranker-submission: venv
