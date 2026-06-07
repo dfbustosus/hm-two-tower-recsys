@@ -477,6 +477,80 @@ $$
 The two-tower is a retrieval challenger.  It must export candidate rows and prove
 candidate recall or MAP@12 gains before it can influence a final submission.
 
+### 12.1 Research-Grade Two-Tower Upgrade Ladder
+
+The repository should evaluate modern two-tower ideas by their expected impact on
+H&M MAP@12, not by novelty alone.  The practical research ladder is:
+
+1. **Sampling-bias and selection-bias control.**  Random, popularity-weighted,
+   and mixed negative sampling are leakage-safe when sampling probabilities are
+   computed only from $\mathcal{T}^{\text{train}}_{\tau}$.  LogQ-style correction
+   adjusts logits as
+   $$
+   s^c(u,i)=a_u^\top b_i-\alpha\log q_\tau(i),
+   $$
+   where $q_\tau(i)$ is estimated from pre-cutoff sampled/training item
+   frequencies.  In this project, LogQ is a tunable challenger because strong
+   correction can improve deeper recall while hurting MAP@12.
+2. **In-batch and cross-batch negatives.**  These are the correct next training
+   objective once a batched trainer exists.  The validation contract must mask a
+   user's known pre-cutoff positives from that user's negative denominator to
+   limit false negatives.  Cross-batch memory queues must reset per split and be
+   reproducible for fixed seeds.
+3. **Feature-rich towers.**  ID-only towers have sparse-customer coverage and
+   cold-item limitations.  Higher-value tower inputs for H&M are recent purchase
+   summaries, age buckets, customer flags, product type/group, department, color,
+   garment group, price/channel aggregates, and cached text/image embeddings.
+4. **Hard negatives.**  Same-category, co-visitation, content-neighbor, and
+   high-score-miss negatives are useful only if mined before the training cutoff.
+   They should be mixed with uniform/popularity negatives rather than replacing
+   them.
+5. **Multi-vector or late-interaction retrieval.**  IntTower/FIT-style sum-max or
+   lightweight similarity scoring can address the late-interaction bottleneck, but
+   they are expensive and should follow a proven candidate-recall gap.  For H&M,
+   multi-interest history vectors or per-category user vectors are likely simpler
+   first steps than a full FIT implementation.
+6. **OneBP-style updates.**  One Backpropagation is attractive for false-negative
+   robustness in one-class collaborative filtering, but it requires a batched
+   training loop and stable item-tower updates.  It is a second-stage optimization,
+   not the first missing piece.
+7. **LLM/generative retrieval.**  LEARN/TIGER/TTDS/URM-style methods are research
+   candidates for content extraction or semantic indexing.  They are not a near
+   term submission path unless they produce candidate-recall gains under the same
+   temporal split and can generate exact valid `article_id` values.
+
+The evidence so far supports this ranking: current candidate sets have a high
+perfect-ranker upper bound relative to achieved MAP@12, so the immediate
+engineering bottleneck is **fast ranking experimentation** and stronger tabular
+ranker features, while two-tower improvements should be measured as candidate
+sources rather than assumed to solve the task alone.
+
+### 12.2 Fast Iteration Protocol
+
+The default workflow for research experiments is:
+
+1. Build or reuse ranker-ready candidate CSVs for a bounded previous-window
+   tuning set and an evaluation set.
+2. Load candidate features once, then evaluate a compact grid in memory.
+3. Select weights only on the previous non-overlapping label window.
+4. Apply the selected configuration once to full validation.
+5. Promote only after rolling windows confirm the result.
+
+For deterministic ranker research, use the fast grid rather than ad-hoc scripts:
+
+```bash
+make deterministic-ranker-tuning \
+  CUTOFF=2020-09-16 \
+  RANKER_CANDIDATE_K=100 \
+  RANKER_MAX_TARGET_CUSTOMERS=10000 \
+  INCLUDE_AGE_SEGMENT_POPULARITY=1 \
+  INCLUDE_GARMENT_GROUP_POPULARITY=1 \
+  INCLUDE_TWO_TOWER_RETRIEVAL=1 \
+  DETERMINISTIC_TUNING_RESEARCH_GRID=1
+```
+
+This is intentionally a research harness, not an automatic submission gate.
+
 ## 13. Submission Construction
 
 For each customer $u \in \mathcal{U}$, the final ranked list is produced by a
