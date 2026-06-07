@@ -31,7 +31,7 @@ TWO_TOWER_EXAMPLE_HEADER = (
 )
 TWO_TOWER_CUSTOMER_MAPPING_HEADER = ("customer_index", "customer_id")
 TWO_TOWER_ARTICLE_MAPPING_HEADER = ("article_index", "article_id")
-TwoTowerExportNegativeSampling = Literal["random"]
+TwoTowerExportNegativeSampling = Literal["random", "popularity", "mixed"]
 TwoTowerPositiveSelection = Literal["first", "latest", "latest_customer"]
 
 
@@ -42,9 +42,10 @@ class TwoTowerExampleExportConfig:
     Attributes:
         negatives_per_positive: Number of random negatives sampled per positive pair.
         seed: Non-negative random seed used for deterministic negative sampling.
-        negative_sampling: Negative sampling strategy. The initial export supports
-            random negatives only; harder strategies can be added after this data
-            contract is stable.
+        negative_sampling: Negative sampling strategy. ``random`` samples uniformly
+            from known pre-cutoff articles, ``popularity`` samples from pre-cutoff
+            article purchase frequencies, and ``mixed`` alternates popularity and
+            uniform negatives.
         positive_selection: Strategy for positive exports. ``first`` keeps the
             earliest unique pairs in transaction-file order; ``latest`` keeps the
             most recently observed unique pairs before the cutoff;
@@ -73,7 +74,7 @@ class TwoTowerExampleExportConfig:
             raise ValueError("negatives_per_positive must be non-negative")
         if self.seed < 0:
             raise ValueError("seed must be non-negative")
-        if self.negative_sampling != "random":
+        if self.negative_sampling not in {"random", "popularity", "mixed"}:
             raise ValueError(f"unsupported negative_sampling: {self.negative_sampling!r}")
         if self.positive_selection not in {"first", "latest", "latest_customer"}:
             raise ValueError(f"unsupported positive_selection: {self.positive_selection!r}")
@@ -239,6 +240,7 @@ def write_two_tower_example_export(
         positive_pair_stats=scan.positive_pair_stats,
         customer_ids=selected_customer_ids,
         article_ids=known_article_ids,
+        article_purchase_counts=scan.article_purchase_counts,
         customer_to_index=customer_to_index,
         article_to_index=article_to_index,
         customer_positive_items=customer_positive_items,
@@ -317,6 +319,7 @@ class _PreCutoffScan:
 
     train_rows_seen: int
     known_article_ids: set[str]
+    article_purchase_counts: dict[str, int]
     selected_customer_ids: set[str]
     positive_pair_stats: dict[tuple[str, str], PositivePairStats]
     customer_positive_items: dict[str, set[str]]
@@ -345,6 +348,7 @@ def _scan_pre_cutoff_transactions(
     train_rows_seen = 0
     scanned_rows = 0
     known_article_ids: set[str] = set()
+    article_purchase_counts: dict[str, int] = {}
     selected_customer_ids: set[str] = set()
     positive_pair_stats: OrderedDict[tuple[str, str], PositivePairStats] = OrderedDict()
     customer_positive_items: dict[str, set[str]] = {}
@@ -366,6 +370,9 @@ def _scan_pre_cutoff_transactions(
             continue
         train_rows_seen += 1
         known_article_ids.add(transaction.article_id)
+        article_purchase_counts[transaction.article_id] = (
+            article_purchase_counts.get(transaction.article_id, 0) + 1
+        )
         key = (transaction.customer_id, transaction.article_id)
         if latest_customer_selection:
             _update_latest_customer_positive_pair_stats(
@@ -411,6 +418,7 @@ def _scan_pre_cutoff_transactions(
     return _PreCutoffScan(
         train_rows_seen=train_rows_seen,
         known_article_ids=known_article_ids,
+        article_purchase_counts=article_purchase_counts,
         selected_customer_ids=selected_customer_ids,
         positive_pair_stats=positive_pair_stats,
         customer_positive_items=customer_positive_items,
@@ -550,6 +558,7 @@ def _write_examples(
     positive_pair_stats: dict[tuple[str, str], PositivePairStats],
     customer_ids: tuple[str, ...],
     article_ids: tuple[str, ...],
+    article_purchase_counts: dict[str, int],
     customer_to_index: dict[str, int],
     article_to_index: dict[str, int],
     customer_positive_items: dict[str, set[str]],
@@ -565,6 +574,10 @@ def _write_examples(
     positive_articles_by_customer: dict[str, list[str]] = {
         customer_id: [] for customer_id in customer_ids
     }
+    popularity_article_ids = _popularity_weighted_article_ids(
+        article_ids=article_ids,
+        article_purchase_counts=article_purchase_counts,
+    )
     for customer_id, article_id in sorted(positive_pair_stats):
         positive_articles_by_customer.setdefault(customer_id, []).append(article_id)
 
@@ -588,12 +601,14 @@ def _write_examples(
                 positive_examples_written += 1
                 negative_article_ids = _sample_negative_article_ids(
                     article_ids=article_ids,
+                    popularity_article_ids=popularity_article_ids,
                     customer_positive_items=customer_positive_items.get(customer_id, set()),
                     emitted_negative_articles=emitted_negative_articles,
                     customer_id=customer_id,
                     positive_article_id=article_id,
                     seed=config.seed,
                     count=config.negatives_per_positive,
+                    negative_sampling=config.negative_sampling,
                 )
                 if len(negative_article_ids) < config.negatives_per_positive:
                     customers_without_negative_pool.add(customer_id)
@@ -612,6 +627,10 @@ def _write_examples(
                             positive_article_id=article_id,
                             anchor_t_dat=stats.last_seen,
                             negative_rank=negative_rank,
+                            example_type=_negative_example_type(
+                                config.negative_sampling,
+                                negative_rank,
+                            ),
                             customer_to_index=customer_to_index,
                             article_to_index=article_to_index,
                         )
@@ -657,10 +676,11 @@ def _negative_example_row(
     positive_article_id: str,
     anchor_t_dat: date,
     negative_rank: int,
+    example_type: str,
     customer_to_index: dict[str, int],
     article_to_index: dict[str, int],
 ) -> tuple[str, ...]:
-    """Build one random-negative example CSV row."""
+    """Build one negative example CSV row."""
 
     return (
         str(customer_to_index[customer_id]),
@@ -668,7 +688,7 @@ def _negative_example_row(
         "0",
         customer_id,
         article_id,
-        "random_negative",
+        example_type,
         anchor_t_dat.isoformat(),
         "0",
         str(negative_rank),
@@ -678,14 +698,16 @@ def _negative_example_row(
 
 def _sample_negative_article_ids(
     article_ids: tuple[str, ...],
+    popularity_article_ids: tuple[str, ...],
     customer_positive_items: set[str],
     emitted_negative_articles: set[str],
     customer_id: str,
     positive_article_id: str,
     seed: int,
     count: int,
+    negative_sampling: TwoTowerExportNegativeSampling,
 ) -> tuple[str, ...]:
-    """Sample deterministic random negatives for one positive anchor."""
+    """Sample deterministic negatives for one positive anchor."""
 
     if count == 0 or not article_ids:
         return ()
@@ -696,7 +718,13 @@ def _sample_negative_article_ids(
     attempts = 0
     while len(selected) < count and attempts < max_attempts:
         attempts += 1
-        candidate = article_ids[rng.randrange(len(article_ids))]
+        candidate_pool = _negative_candidate_pool(
+            negative_sampling,
+            negative_rank=len(selected) + 1,
+            article_ids=article_ids,
+            popularity_article_ids=popularity_article_ids,
+        )
+        candidate = candidate_pool[rng.randrange(len(candidate_pool))]
         if _is_forbidden_negative(
             candidate,
             customer_positive_items,
@@ -738,6 +766,53 @@ def _is_forbidden_negative(
         or article_id in emitted_negative_articles
         or article_id in selected_negative_articles
     )
+
+
+def _popularity_weighted_article_ids(
+    article_ids: tuple[str, ...],
+    article_purchase_counts: dict[str, int],
+) -> tuple[str, ...]:
+    """Return article IDs repeated by pre-cutoff popularity count.
+
+    Counts are collected only from ``t_dat < cutoff`` rows, so popularity-weighted
+    negatives cannot use validation target transactions. This materialized list is
+    intentionally simple for bounded smoke experiments; a future batched trainer
+    should replace it with vectorized alias sampling.
+    """
+
+    weighted: list[str] = []
+    for article_id in article_ids:
+        weighted.extend([article_id] * max(article_purchase_counts.get(article_id, 0), 1))
+    return tuple(weighted) if weighted else article_ids
+
+
+def _negative_candidate_pool(
+    negative_sampling: TwoTowerExportNegativeSampling,
+    *,
+    negative_rank: int,
+    article_ids: tuple[str, ...],
+    popularity_article_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return the candidate pool used for one negative draw."""
+
+    if negative_sampling == "popularity":
+        return popularity_article_ids
+    if negative_sampling == "mixed" and negative_rank % 2 == 1:
+        return popularity_article_ids
+    return article_ids
+
+
+def _negative_example_type(
+    negative_sampling: TwoTowerExportNegativeSampling,
+    negative_rank: int,
+) -> str:
+    """Return the row example_type for one negative draw."""
+
+    if negative_sampling == "popularity":
+        return "popularity_negative"
+    if negative_sampling == "mixed" and negative_rank % 2 == 1:
+        return "popularity_negative"
+    return "random_negative"
 
 
 def _stable_pair_seed(seed: int, customer_id: str, article_id: str) -> int:
