@@ -121,6 +121,28 @@ def test_two_tower_bpr_training_runs_on_anchor_negatives(tmp_path: Path) -> None
     assert rank_two_tower_candidates(model, CUSTOMER_ID, k=2)
 
 
+def test_two_tower_training_accepts_logq_correction(tmp_path: Path) -> None:
+    paths = write_two_tower_smoke_artifacts(tmp_path)
+
+    model, summary = train_two_tower_smoke_model_from_csv(
+        paths["examples"],
+        paths["customers"],
+        paths["articles"],
+        config=TwoTowerSmokeTrainingConfig(
+            embedding_dim=4,
+            epochs=2,
+            learning_rate=0.1,
+            seed=11,
+            loss="bpr",
+            logq_correction_alpha=0.5,
+        ),
+    )
+
+    assert summary.config.logq_correction_alpha == 0.5
+    assert summary.final_average_loss >= 0.0
+    assert rank_two_tower_candidates(model, CUSTOMER_ID, k=2)
+
+
 def test_two_tower_smoke_rejects_invalid_inputs(tmp_path: Path) -> None:
     paths = write_two_tower_smoke_artifacts(tmp_path)
 
@@ -128,6 +150,8 @@ def test_two_tower_smoke_rejects_invalid_inputs(tmp_path: Path) -> None:
         TwoTowerSmokeTrainingConfig(embedding_dim=0)
     with pytest.raises(ValueError, match="positive_recency_half_life_days"):
         TwoTowerSmokeTrainingConfig(positive_recency_half_life_days=0)
+    with pytest.raises(ValueError, match="logq_correction_alpha"):
+        TwoTowerSmokeTrainingConfig(logq_correction_alpha=-0.1)
     model, _ = train_two_tower_smoke_model_from_csv(
         paths["examples"],
         paths["customers"],
