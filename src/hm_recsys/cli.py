@@ -3396,13 +3396,17 @@ def _two_tower_config_slug(args: argparse.Namespace) -> str | None:
 
     if not getattr(args, "include_two_tower_retrieval", False):
         return None
+    negative_sampling = getattr(args, "two_tower_negative_sampling", "random")
+    negative_slug = f"_{negative_sampling}" if negative_sampling != "random" else ""
+    logq_alpha = getattr(args, "two_tower_logq_correction_alpha", 0.0)
+    logq_slug = f"_logq{logq_alpha:g}" if logq_alpha > 0.0 else ""
     return (
         f"{args.two_tower_positive_selection}_"
         f"pos{args.two_tower_max_positive_examples}_"
-        f"neg{args.two_tower_negatives_per_positive}_"
+        f"neg{args.two_tower_negatives_per_positive}{negative_slug}_"
         f"dim{args.two_tower_embedding_dim}_"
         f"e{args.two_tower_epochs}_"
-        f"{args.two_tower_loss}"
+        f"{args.two_tower_loss}{logq_slug}"
     )
 
 
