@@ -46,6 +46,10 @@ class TwoTowerSmokeTrainingConfig:
         recency_reference_date: Optional ISO date used as the recency anchor. If
             omitted while recency weighting is enabled, the latest anchor date in
             the examples file is used.
+        logq_correction_alpha: Optional LogQ/logit-correction strength. When > 0,
+            training logits use ``dot(user, item) - alpha * log(q(item))`` where
+            ``q`` is estimated from the exported training examples. This debiases
+            non-uniform sampled negatives without using validation rows.
     """
 
     embedding_dim: int = 16
@@ -57,6 +61,7 @@ class TwoTowerSmokeTrainingConfig:
     max_training_examples: int | None = None
     positive_recency_half_life_days: float | None = None
     recency_reference_date: str | None = None
+    logq_correction_alpha: float = 0.0
 
     def __post_init__(self) -> None:
         """Validate training hyperparameters."""
@@ -82,6 +87,8 @@ class TwoTowerSmokeTrainingConfig:
             raise ValueError("positive_recency_half_life_days must be positive when provided")
         if self.recency_reference_date is not None:
             _parse_iso_date(self.recency_reference_date, field_name="recency_reference_date")
+        if self.logq_correction_alpha < 0.0:
+            raise ValueError("logq_correction_alpha must be non-negative")
 
 
 @dataclass(frozen=True)
@@ -229,12 +236,18 @@ def train_two_tower_smoke_model_from_csv(
     for example in examples:
         if example.label == 1:
             article_positive_counts[example.article_index] += max(1, example.positive_count)
+    article_logq_corrections = _article_logq_corrections(
+        examples=examples,
+        article_count=len(article_ids),
+        alpha=training_config.logq_correction_alpha,
+    )
 
     recency_reference_date = _resolve_recency_reference_date(training_config, examples)
     final_loss = _train_embedding_tables(
         examples=examples,
         customer_embeddings=customer_embeddings,
         article_embeddings=article_embeddings,
+        article_logq_corrections=article_logq_corrections,
         config=training_config,
         recency_reference_date=recency_reference_date,
     )
@@ -595,6 +608,7 @@ def _train_embedding_tables(
     examples: Sequence[TwoTowerTrainingExample],
     customer_embeddings: list[list[float]],
     article_embeddings: list[list[float]],
+    article_logq_corrections: Sequence[float],
     config: TwoTowerSmokeTrainingConfig,
     recency_reference_date: date | None,
 ) -> float:
@@ -603,6 +617,7 @@ def _train_embedding_tables(
             examples,
             customer_embeddings,
             article_embeddings,
+            article_logq_corrections,
             config,
             recency_reference_date,
         )
@@ -610,6 +625,7 @@ def _train_embedding_tables(
         examples,
         customer_embeddings,
         article_embeddings,
+        article_logq_corrections,
         config,
         recency_reference_date,
     )
@@ -619,6 +635,7 @@ def _train_embedding_tables_logistic(
     examples: Sequence[TwoTowerTrainingExample],
     customer_embeddings: list[list[float]],
     article_embeddings: list[list[float]],
+    article_logq_corrections: Sequence[float],
     config: TwoTowerSmokeTrainingConfig,
     recency_reference_date: date | None,
 ) -> float:
@@ -628,7 +645,7 @@ def _train_embedding_tables_logistic(
         for example in examples:
             user_vector = customer_embeddings[example.customer_index]
             item_vector = article_embeddings[example.article_index]
-            score = _dot(user_vector, item_vector)
+            score = _dot(user_vector, item_vector) - article_logq_corrections[example.article_index]
             probability = _sigmoid(score)
             weight = _example_training_weight(example, config, recency_reference_date)
             error = (probability - example.label) * weight
@@ -650,6 +667,7 @@ def _train_embedding_tables_bpr(
     examples: Sequence[TwoTowerTrainingExample],
     customer_embeddings: list[list[float]],
     article_embeddings: list[list[float]],
+    article_logq_corrections: Sequence[float],
     config: TwoTowerSmokeTrainingConfig,
     recency_reference_date: date | None,
 ) -> float:
@@ -668,7 +686,13 @@ def _train_embedding_tables_bpr(
             user_vector = customer_embeddings[example.customer_index]
             positive_vector = article_embeddings[example.positive_anchor_article_index or 0]
             negative_vector = article_embeddings[example.article_index]
-            score_diff = _dot(user_vector, positive_vector) - _dot(user_vector, negative_vector)
+            positive_index = example.positive_anchor_article_index or 0
+            score_diff = (
+                _dot(user_vector, positive_vector)
+                - article_logq_corrections[positive_index]
+                - _dot(user_vector, negative_vector)
+                + article_logq_corrections[example.article_index]
+            )
             probability = _sigmoid(score_diff)
             weight = _example_training_weight(example, config, recency_reference_date)
             error = (probability - 1.0) * weight
@@ -715,6 +739,22 @@ def _candidate_article_indices(
     if max_retrieval_articles is not None:
         return tuple(ranked_indices_with_prior[:max_retrieval_articles])
     return tuple(ranked_indices_with_prior)
+
+
+def _article_logq_corrections(
+    examples: Sequence[TwoTowerTrainingExample],
+    article_count: int,
+    alpha: float,
+) -> tuple[float, ...]:
+    """Estimate ``alpha * log(q(item))`` corrections from exported examples."""
+
+    if alpha == 0.0 or article_count == 0:
+        return tuple(0.0 for _ in range(article_count))
+    counts = [1.0] * article_count
+    for example in examples:
+        counts[example.article_index] += 1.0
+    denominator = sum(counts)
+    return tuple(alpha * math.log(count / denominator) for count in counts)
 
 
 def _article_prior_score(
