@@ -176,6 +176,33 @@ def test_deterministic_ranker_scores_two_tower_variants_separately() -> None:
     )
 
 
+def test_deterministic_ranker_scores_two_tower_rank_reciprocal() -> None:
+    top_ranked_features = CandidateFeatures(
+        customer_id=CUSTOMER_ID,
+        article_id=ARTICLE_1,
+        two_tower_retrieval_rank=1,
+        two_tower_retrieval_latest_customer_rank=1,
+    )
+    lower_ranked_features = CandidateFeatures(
+        customer_id=CUSTOMER_ID,
+        article_id=ARTICLE_2,
+        two_tower_retrieval_rank=10,
+        two_tower_retrieval_latest_customer_rank=10,
+    )
+    weights = DeterministicRankerWeights(
+        two_tower_retrieval_presence_weight=0.0,
+        two_tower_retrieval_score_weight=0.0,
+        two_tower_retrieval_rank_weight=1.0,
+        two_tower_retrieval_latest_customer_presence_weight=0.0,
+        two_tower_retrieval_latest_customer_score_weight=0.0,
+        two_tower_retrieval_latest_customer_rank_weight=1.0,
+    )
+
+    assert score_candidate(top_ranked_features, weights) > score_candidate(
+        lower_ranked_features, weights
+    )
+
+
 def test_evaluate_deterministic_ranker_from_csv_reports_same_scope_delta(tmp_path: Path) -> None:
     candidate_path = tmp_path / "candidates.csv"
     write_candidate_csv(
