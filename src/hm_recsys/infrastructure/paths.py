@@ -744,6 +744,7 @@ class ProjectPaths:
         seed: int,
         max_positive_examples: int | None = None,
         positive_selection: str | None = None,
+        negative_sampling: str | None = None,
     ) -> Path:
         """Return the default two-tower examples CSV path.
 
@@ -753,6 +754,8 @@ class ProjectPaths:
             seed: Deterministic negative-sampling seed.
             max_positive_examples: Optional deterministic smoke-run cap.
             positive_selection: Optional capped positive-selection strategy.
+            negative_sampling: Optional negative-sampling strategy. Non-random
+                values are included in the filename to avoid artifact collisions.
 
         Returns:
             Path under ``artifacts/two-tower/``.
@@ -762,6 +765,8 @@ class ProjectPaths:
             f"two_tower_examples_cutoff_{_safe_name(cutoff)}_"
             f"neg{negatives_per_positive}_seed{seed}"
         )
+        if negative_sampling is not None and negative_sampling != "random":
+            name = f"{name}_{_safe_name(negative_sampling)}"
         if max_positive_examples is not None:
             name = f"{name}_first_{max_positive_examples}_positives"
             if positive_selection is not None and positive_selection != "first":
@@ -815,6 +820,7 @@ class ProjectPaths:
         k: int,
         evaluation_ks: Sequence[int] | None = None,
         loss: str | None = None,
+        logq_correction_alpha: float | None = None,
         positive_recency_half_life_days: float | None = None,
         popularity_prior_weight: float | None = None,
         popularity_prior_lookback_days: int | None = None,
@@ -829,6 +835,8 @@ class ProjectPaths:
             name = f"{name}_recall_{_evaluation_k_slug(evaluation_ks)}"
         if loss is not None and loss != "logistic":
             name = f"{name}_loss_{_safe_name(loss)}"
+        if logq_correction_alpha is not None and logq_correction_alpha > 0.0:
+            name = f"{name}_logq{_float_path_token(logq_correction_alpha)}"
         if positive_recency_half_life_days is not None:
             name = f"{name}_rechalf{_float_path_token(positive_recency_half_life_days)}"
         if popularity_prior_weight is not None and popularity_prior_weight > 0.0:
