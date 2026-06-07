@@ -35,6 +35,12 @@ class DeterministicRankerTuningGrid:
     has a narrower hypothesis.
 
     Attributes:
+        repeat_presence_weights: Candidate additive weights for repeat candidates.
+        repeat_score_weights: Candidate score weights for repeat candidates.
+        recent_popularity_presence_weights: Candidate additive weights for recent popularity.
+        recent_popularity_score_weights: Candidate score weights for recent popularity.
+        co_visitation_presence_weights: Candidate additive weights for co-visitation.
+        co_visitation_score_weights: Candidate score weights for co-visitation.
         garment_group_popularity_presence_weights: Candidate additive weights for
             garment-group affinity candidates.
         garment_group_popularity_score_weights: Candidate score weights for
@@ -49,12 +55,22 @@ class DeterministicRankerTuningGrid:
             two-tower retrieval candidates.
         two_tower_retrieval_score_weights: Candidate score weights for
             two-tower retrieval scores.
+        two_tower_retrieval_rank_weights: Candidate reciprocal-rank weights for
+            two-tower retrieval ranks.
         two_tower_retrieval_latest_customer_presence_weights: Candidate additive
             weights for broader latest-positive-per-customer two-tower candidates.
         two_tower_retrieval_latest_customer_score_weights: Candidate score weights
             for broader latest-positive-per-customer two-tower scores.
+        two_tower_retrieval_latest_customer_rank_weights: Candidate reciprocal-rank
+            weights for broader latest-positive-per-customer two-tower ranks.
     """
 
+    repeat_presence_weights: tuple[float, ...] = (3.0,)
+    repeat_score_weights: tuple[float, ...] = (2.0,)
+    recent_popularity_presence_weights: tuple[float, ...] = (1.0,)
+    recent_popularity_score_weights: tuple[float, ...] = (1.0,)
+    co_visitation_presence_weights: tuple[float, ...] = (0.35,)
+    co_visitation_score_weights: tuple[float, ...] = (0.10,)
     garment_group_popularity_presence_weights: tuple[float, ...] = (0.2, 0.4, 0.6, 0.8)
     garment_group_popularity_score_weights: tuple[float, ...] = (0.10, 0.25, 0.40)
     age_segment_popularity_presence_weights: tuple[float, ...] = (0.0, 0.15, 0.30, 0.45)
@@ -63,8 +79,10 @@ class DeterministicRankerTuningGrid:
     best_rank_score_weights: tuple[float, ...] = (0.0, 0.05)
     two_tower_retrieval_presence_weights: tuple[float, ...] = (0.10,)
     two_tower_retrieval_score_weights: tuple[float, ...] = (0.05,)
+    two_tower_retrieval_rank_weights: tuple[float, ...] = (0.0,)
     two_tower_retrieval_latest_customer_presence_weights: tuple[float, ...] = (0.10,)
     two_tower_retrieval_latest_customer_score_weights: tuple[float, ...] = (0.05,)
+    two_tower_retrieval_latest_customer_rank_weights: tuple[float, ...] = (0.0,)
 
     def __post_init__(self) -> None:
         """Validate grid values.
@@ -102,6 +120,12 @@ class DeterministicRankerTuningGrid:
         """
 
         for (
+            repeat_presence,
+            repeat_score,
+            recent_presence,
+            recent_score,
+            co_visitation_presence,
+            co_visitation_score,
             garment_presence,
             garment_score,
             age_presence,
@@ -110,9 +134,17 @@ class DeterministicRankerTuningGrid:
             best_rank,
             two_tower_presence,
             two_tower_score,
+            two_tower_rank,
             two_tower_latest_customer_presence,
             two_tower_latest_customer_score,
+            two_tower_latest_customer_rank,
         ) in product(
+            self.repeat_presence_weights,
+            self.repeat_score_weights,
+            self.recent_popularity_presence_weights,
+            self.recent_popularity_score_weights,
+            self.co_visitation_presence_weights,
+            self.co_visitation_score_weights,
             self.garment_group_popularity_presence_weights,
             self.garment_group_popularity_score_weights,
             self.age_segment_popularity_presence_weights,
@@ -121,11 +153,19 @@ class DeterministicRankerTuningGrid:
             self.best_rank_score_weights,
             self.two_tower_retrieval_presence_weights,
             self.two_tower_retrieval_score_weights,
+            self.two_tower_retrieval_rank_weights,
             self.two_tower_retrieval_latest_customer_presence_weights,
             self.two_tower_retrieval_latest_customer_score_weights,
+            self.two_tower_retrieval_latest_customer_rank_weights,
         ):
             yield replace(
                 base_weights,
+                repeat_presence_weight=repeat_presence,
+                repeat_score_weight=repeat_score,
+                recent_popularity_presence_weight=recent_presence,
+                recent_popularity_score_weight=recent_score,
+                co_visitation_presence_weight=co_visitation_presence,
+                co_visitation_score_weight=co_visitation_score,
                 garment_group_popularity_presence_weight=garment_presence,
                 garment_group_popularity_score_weight=garment_score,
                 age_segment_popularity_presence_weight=age_presence,
@@ -134,10 +174,12 @@ class DeterministicRankerTuningGrid:
                 best_rank_score_weight=best_rank,
                 two_tower_retrieval_presence_weight=two_tower_presence,
                 two_tower_retrieval_score_weight=two_tower_score,
+                two_tower_retrieval_rank_weight=two_tower_rank,
                 two_tower_retrieval_latest_customer_presence_weight=(
                     two_tower_latest_customer_presence
                 ),
                 two_tower_retrieval_latest_customer_score_weight=two_tower_latest_customer_score,
+                two_tower_retrieval_latest_customer_rank_weight=two_tower_latest_customer_rank,
             )
 
 
