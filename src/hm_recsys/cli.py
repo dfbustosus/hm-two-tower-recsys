@@ -671,8 +671,8 @@ def build_parser() -> argparse.ArgumentParser:
     two_tower_export_parser.add_argument(
         "--negative-sampling",
         default="random",
-        choices=("random",),
-        help="Negative sampling strategy. Currently only random is implemented.",
+        choices=("random", "popularity", "mixed"),
+        help="Negative sampling strategy for exported two-tower negatives.",
     )
     two_tower_export_parser.add_argument(
         "--positive-selection",
@@ -700,6 +700,11 @@ def build_parser() -> argparse.ArgumentParser:
     two_tower_eval_parser.add_argument("--horizon-days", type=int, default=7)
     two_tower_eval_parser.add_argument("--negatives-per-positive", type=int, default=1)
     two_tower_eval_parser.add_argument(
+        "--negative-sampling",
+        default="random",
+        choices=("random", "popularity", "mixed"),
+    )
+    two_tower_eval_parser.add_argument(
         "--positive-selection",
         default="first",
         choices=("first", "latest", "latest_customer"),
@@ -716,6 +721,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("logistic", "bpr"),
         help="Two-tower training objective. Defaults to pointwise logistic.",
     )
+    two_tower_eval_parser.add_argument("--logq-correction-alpha", type=float, default=0.0)
     two_tower_eval_parser.add_argument(
         "--positive-recency-half-life-days",
         type=float,
@@ -994,6 +1000,11 @@ def _add_two_tower_candidate_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--two-tower-customer-mapping-path", type=Path, default=None)
     parser.add_argument("--two-tower-article-mapping-path", type=Path, default=None)
     parser.add_argument("--two-tower-negatives-per-positive", type=int, default=1)
+    parser.add_argument(
+        "--two-tower-negative-sampling",
+        default="random",
+        choices=("random", "popularity", "mixed"),
+    )
     parser.add_argument("--two-tower-seed", type=int, default=42)
     parser.add_argument(
         "--two-tower-positive-selection",
@@ -1010,6 +1021,7 @@ def _add_two_tower_candidate_arguments(parser: argparse.ArgumentParser) -> None:
         default="bpr",
         choices=("logistic", "bpr"),
     )
+    parser.add_argument("--two-tower-logq-correction-alpha", type=float, default=0.0)
     parser.add_argument("--two-tower-max-training-examples", type=int, default=None)
     parser.add_argument("--two-tower-max-retrieval-articles", type=int, default=5000)
 
@@ -2776,15 +2788,12 @@ def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
         ``0`` after writing examples, mappings, and summary metadata.
     """
 
-    if args.negative_sampling != "random":
-        raise ValueError(f"unsupported negative_sampling: {args.negative_sampling!r}")
-
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     config = TwoTowerExampleExportConfig(
         negatives_per_positive=args.negatives_per_positive,
         seed=args.seed,
-        negative_sampling="random",
+        negative_sampling=args.negative_sampling,
         positive_selection=args.positive_selection,
         max_positive_examples=args.max_positive_examples,
     )
@@ -2794,6 +2803,7 @@ def _handle_export_two_tower_examples(args: argparse.Namespace) -> int:
         seed=args.seed,
         max_positive_examples=args.max_positive_examples,
         positive_selection=args.positive_selection,
+        negative_sampling=args.negative_sampling,
     )
     examples_path = _resolve_path_under_root(paths, examples_path)
     customer_mapping_path = args.customer_mapping_path or paths.two_tower_customer_mapping_path(
@@ -2858,6 +2868,7 @@ def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
         seed=args.seed,
         max_positive_examples=args.max_positive_examples,
         positive_selection=args.positive_selection,
+        negative_sampling=args.negative_sampling,
     )
     examples_path = _resolve_path_under_root(paths, examples_path)
     customer_mapping_path = args.customer_mapping_path or paths.two_tower_customer_mapping_path(
@@ -2876,6 +2887,7 @@ def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
         k=args.k,
         evaluation_ks=args.evaluation_ks,
         loss=args.loss,
+        logq_correction_alpha=args.logq_correction_alpha,
         positive_recency_half_life_days=args.positive_recency_half_life_days,
         popularity_prior_weight=args.popularity_prior_weight,
         popularity_prior_lookback_days=(
@@ -2899,6 +2911,7 @@ def _handle_evaluate_two_tower_retrieval(args: argparse.Namespace) -> int:
         max_training_examples=args.max_training_examples,
         positive_recency_half_life_days=args.positive_recency_half_life_days,
         recency_reference_date=recency_reference_date,
+        logq_correction_alpha=args.logq_correction_alpha,
     )
     print(
         "Training lightweight two-tower smoke model from exported examples: " f"{examples_path}",
@@ -3334,6 +3347,7 @@ def _train_two_tower_candidate_model_if_enabled(
         seed=args.two_tower_seed,
         max_positive_examples=args.two_tower_max_positive_examples,
         positive_selection=args.two_tower_positive_selection,
+        negative_sampling=args.two_tower_negative_sampling,
     )
     examples_path = _resolve_path_under_root(paths, examples_path)
     customer_mapping_path = getattr(
@@ -3356,6 +3370,7 @@ def _train_two_tower_candidate_model_if_enabled(
         seed=args.two_tower_seed,
         loss=args.two_tower_loss,
         max_training_examples=args.two_tower_max_training_examples,
+        logq_correction_alpha=args.two_tower_logq_correction_alpha,
     )
     print(
         "Training two-tower candidate model from exported examples: " f"{examples_path}",
