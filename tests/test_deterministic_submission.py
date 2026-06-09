@@ -60,6 +60,8 @@ def test_deterministic_ranker_submission_predictions_with_garment_source() -> No
         ALL_TIME_POPULARITY_SOURCE: 6,
         GARMENT_GROUP_POPULARITY_SOURCE: 4,
         RECENT_POPULARITY_SOURCE: 6,
+        "recent_popularity_1d": 3,
+        "recent_popularity_3d": 6,
         REPEAT_SOURCE: 2,
     }
 
