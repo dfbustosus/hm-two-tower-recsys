@@ -35,9 +35,17 @@ from hm_recsys.retrieval.content_similarity import (
 )
 from hm_recsys.retrieval.metadata_affinity import (
     GARMENT_GROUP_COLUMN,
+    PRODUCT_CODE_COLUMN,
     ArticleAttributePopularityIndex,
     build_article_attribute_popularity_candidates,
     build_article_attribute_popularity_index,
+)
+from hm_recsys.retrieval.seasonality import (
+    DEFAULT_SEASONAL_SHIFT_DAYS,
+    DEFAULT_SEASONAL_WINDOW_DAYS,
+    SeasonalPopularityIndex,
+    build_seasonal_popularity_candidates,
+    build_seasonal_popularity_index,
 )
 from hm_recsys.retrieval.segment_popularity import (
     DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
@@ -51,8 +59,10 @@ from hm_recsys.retrieval.source_names import (
     CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
+    PRODUCT_CODE_POPULARITY_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    SEASONAL_POPULARITY_SOURCE,
     TWO_TOWER_RETRIEVAL_SOURCE,
 )
 from hm_recsys.training.two_tower_retrieval import TwoTowerSmokeModel, score_two_tower_candidates
@@ -103,6 +113,9 @@ class CandidateExportSummary:
         include_co_visitation: Whether co-visitation rows were exported.
         co_visitation_max_history_items: Co-visitation customer-history length.
         co_visitation_max_neighbors_per_item: Co-visitation neighbor cap per item.
+        include_seasonal_popularity: Whether shifted-window seasonal rows were exported.
+        seasonal_shift_days: Historical shift between cutoff and seasonal window start.
+        seasonal_window_days: Length of the historical seasonal popularity window.
         include_age_segment_popularity: Whether age-segment popularity rows were exported.
         age_segment_bucket_size: Width of customer age buckets when segment rows are exported.
         age_segment_popularity_lookback_days: Pre-cutoff lookback used for segment counts.
@@ -137,12 +150,18 @@ class CandidateExportSummary:
     include_co_visitation: bool
     co_visitation_max_history_items: int
     co_visitation_max_neighbors_per_item: int
+    include_seasonal_popularity: bool
+    seasonal_shift_days: int | None
+    seasonal_window_days: int | None
     include_age_segment_popularity: bool
     age_segment_bucket_size: int | None
     age_segment_popularity_lookback_days: int | None
     include_garment_group_popularity: bool
     garment_group_popularity_lookback_days: int | None
     garment_group_max_history_items: int | None
+    include_product_code_popularity: bool
+    product_code_popularity_lookback_days: int | None
+    product_code_max_history_items: int | None
     content_similarity_manifest_path: str | None
     content_similarity_source_name: str | None
     content_similarity_max_history_items: int | None
@@ -169,6 +188,9 @@ def write_validation_candidate_export(
     include_co_visitation: bool = True,
     co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    include_seasonal_popularity: bool = False,
+    seasonal_shift_days: int = DEFAULT_SEASONAL_SHIFT_DAYS,
+    seasonal_window_days: int = DEFAULT_SEASONAL_WINDOW_DAYS,
     include_age_segment_popularity: bool = False,
     customer_segment_by_id: Mapping[str, str] | None = None,
     age_segment_bucket_size: int = DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
@@ -177,6 +199,10 @@ def write_validation_candidate_export(
     article_garment_group_by_id: Mapping[str, str] | None = None,
     garment_group_popularity_lookback_days: int | None = None,
     garment_group_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    include_product_code_popularity: bool = False,
+    article_product_code_by_id: Mapping[str, str] | None = None,
+    product_code_popularity_lookback_days: int | None = None,
+    product_code_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     content_similarity_manifest_path: Path | str | None = None,
     content_similarity_source_name: str = MULTIMODAL_SIMILARITY_SOURCE,
     content_similarity_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
@@ -208,6 +234,12 @@ def write_validation_candidate_export(
         co_visitation_max_history_items: Recent unique customer-history length
             used by co-visitation.
         co_visitation_max_neighbors_per_item: Maximum neighbors retained per item.
+        include_seasonal_popularity: Whether to export global shifted-window
+            seasonal popularity rows.
+        seasonal_shift_days: Number of days between cutoff and historical window
+            start when seasonal rows are enabled.
+        seasonal_window_days: Historical seasonal window length when seasonal
+            rows are enabled.
         include_age_segment_popularity: Whether to export customer age-segment
             popularity rows.
         customer_segment_by_id: Customer-to-age-segment mapping required when
@@ -256,6 +288,10 @@ def write_validation_candidate_export(
         raise ValueError("popularity_lookback_days must be positive")
     if max_target_customers is not None and max_target_customers <= 0:
         raise ValueError("max_target_customers must be positive when provided")
+    if seasonal_shift_days <= 0:
+        raise ValueError("seasonal_shift_days must be positive")
+    if seasonal_window_days <= 0:
+        raise ValueError("seasonal_window_days must be positive")
     if content_similarity_manifest_path is not None and not content_similarity_source_name:
         raise ValueError("content_similarity_source_name must not be empty")
     if content_similarity_manifest_path is not None and content_similarity_max_history_items <= 0:
@@ -286,6 +322,17 @@ def write_validation_candidate_export(
     )
     if resolved_garment_group_lookback_days <= 0:
         raise ValueError("garment_group_popularity_lookback_days must be positive")
+    if include_product_code_popularity and article_product_code_by_id is None:
+        raise ValueError("article_product_code_by_id is required for product-code popularity")
+    if product_code_max_history_items <= 0:
+        raise ValueError("product_code_max_history_items must be positive")
+    resolved_product_code_lookback_days = (
+        product_code_popularity_lookback_days
+        if product_code_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_product_code_lookback_days <= 0:
+        raise ValueError("product_code_popularity_lookback_days must be positive")
 
     started_at = perf_counter()
     validation_data = summarize_temporal_split_with_labels(transaction_iter_factory(), split)
@@ -313,6 +360,17 @@ def write_validation_candidate_export(
         if include_co_visitation
         else None
     )
+    seasonal_popularity_index = (
+        build_seasonal_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            shift_days=seasonal_shift_days,
+            window_days=seasonal_window_days,
+            max_articles=k,
+        )
+        if include_seasonal_popularity
+        else None
+    )
     age_segment_index = (
         build_age_segment_popularity_index(
             transactions=transaction_iter_factory(),
@@ -336,6 +394,20 @@ def write_validation_candidate_export(
             max_articles_per_attribute=k,
         )
         if include_garment_group_popularity
+        else None
+    )
+    product_code_index = (
+        build_article_attribute_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            target_customer_ids=target_customer_ids,
+            article_attribute_by_id=article_product_code_by_id or {},
+            attribute_name=PRODUCT_CODE_COLUMN,
+            lookback_days=resolved_product_code_lookback_days,
+            max_history_items=product_code_max_history_items,
+            max_articles_per_attribute=k,
+        )
+        if include_product_code_popularity
         else None
     )
     content_similarity_index = (
@@ -368,8 +440,10 @@ def write_validation_candidate_export(
             recent_popularity=baseline_sources.recent_popularity[:k],
             all_time_popularity=baseline_sources.all_time_popularity[:k],
             co_visitation_index=co_visitation_index,
+            seasonal_popularity_index=seasonal_popularity_index,
             age_segment_index=age_segment_index,
             garment_group_index=garment_group_index,
+            product_code_index=product_code_index,
             content_similarity_index=content_similarity_index,
             two_tower_model=two_tower_model,
             two_tower_source_name=two_tower_source_name,
@@ -393,6 +467,9 @@ def write_validation_candidate_export(
         include_co_visitation=include_co_visitation,
         co_visitation_max_history_items=co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=include_seasonal_popularity,
+        seasonal_shift_days=seasonal_shift_days if include_seasonal_popularity else None,
+        seasonal_window_days=seasonal_window_days if include_seasonal_popularity else None,
         include_age_segment_popularity=include_age_segment_popularity,
         age_segment_bucket_size=(
             age_segment_bucket_size if include_age_segment_popularity else None
@@ -406,6 +483,13 @@ def write_validation_candidate_export(
         ),
         garment_group_max_history_items=(
             garment_group_max_history_items if include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            resolved_product_code_lookback_days if include_product_code_popularity else None
+        ),
+        product_code_max_history_items=(
+            product_code_max_history_items if include_product_code_popularity else None
         ),
         content_similarity_manifest_path=(
             str(Path(content_similarity_manifest_path).expanduser().resolve())
@@ -541,8 +625,10 @@ def _iter_candidate_records(
     all_time_popularity: Sequence[str],
     co_visitation_index: CoVisitationIndex | None,
     k: int,
+    seasonal_popularity_index: SeasonalPopularityIndex | None = None,
     age_segment_index: AgeSegmentPopularityIndex | None = None,
     garment_group_index: ArticleAttributePopularityIndex | None = None,
+    product_code_index: ArticleAttributePopularityIndex | None = None,
     content_similarity_index: ContentSimilarityIndex | None = None,
     two_tower_model: TwoTowerSmokeModel | None = None,
     two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
@@ -557,8 +643,10 @@ def _iter_candidate_records(
             recent_popularity=recent_popularity,
             all_time_popularity=all_time_popularity,
             co_visitation_index=co_visitation_index,
+            seasonal_popularity_index=seasonal_popularity_index,
             age_segment_index=age_segment_index,
             garment_group_index=garment_group_index,
+            product_code_index=product_code_index,
             content_similarity_index=content_similarity_index,
             two_tower_model=two_tower_model,
             two_tower_source_name=two_tower_source_name,
@@ -574,8 +662,10 @@ def iter_candidate_records_for_customer(
     all_time_popularity: Sequence[str],
     co_visitation_index: CoVisitationIndex | None,
     k: int,
+    seasonal_popularity_index: SeasonalPopularityIndex | None = None,
     age_segment_index: AgeSegmentPopularityIndex | None = None,
     garment_group_index: ArticleAttributePopularityIndex | None = None,
+    product_code_index: ArticleAttributePopularityIndex | None = None,
     content_similarity_index: ContentSimilarityIndex | None = None,
     two_tower_model: TwoTowerSmokeModel | None = None,
     two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
@@ -589,6 +679,7 @@ def iter_candidate_records_for_customer(
         recent_popularity: Global recent-popularity ranking.
         all_time_popularity: Global all-time popularity ranking.
         co_visitation_index: Optional co-visitation index for item-item rows.
+        seasonal_popularity_index: Optional shifted-window seasonal popularity index.
         age_segment_index: Optional age-segment popularity index.
         garment_group_index: Optional garment-group affinity popularity index.
         k: Maximum candidates emitted per source.
@@ -631,6 +722,20 @@ def iter_candidate_records_for_customer(
                 k=k,
             )
         )
+    if seasonal_popularity_index is not None:
+        yield from (
+            CandidateRecord(
+                customer_id=customer_id,
+                article_id=candidate.article_id,
+                source=SEASONAL_POPULARITY_SOURCE,
+                source_rank=candidate.rank,
+                source_score=candidate.score,
+            )
+            for candidate in build_seasonal_popularity_candidates(
+                seasonal_popularity_index,
+                k=k,
+            )
+        )
     if age_segment_index is not None:
         yield from (
             CandidateRecord(
@@ -657,6 +762,21 @@ def iter_candidate_records_for_customer(
             )
             for candidate in build_article_attribute_popularity_candidates(
                 garment_group_index,
+                customer_id,
+                k=k,
+            )
+        )
+    if product_code_index is not None:
+        yield from (
+            CandidateRecord(
+                customer_id=customer_id,
+                article_id=candidate.article_id,
+                source=PRODUCT_CODE_POPULARITY_SOURCE,
+                source_rank=candidate.rank,
+                source_score=candidate.score,
+            )
+            for candidate in build_article_attribute_popularity_candidates(
+                product_code_index,
                 customer_id,
                 k=k,
             )
