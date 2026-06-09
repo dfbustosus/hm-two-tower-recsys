@@ -86,7 +86,15 @@ DETERMINISTIC_TUNING_RESEARCH_GRID ?=
 KAGGLE_COMPETITION ?= h-and-m-personalized-fashion-recommendations
 KAGGLE_MESSAGE ?= repeat popularity baseline smoke test
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export two-tower-retrieval-smoke kaggle-submit format clean clean-venv
+EDA_ROLLING_CUTOFFS ?= 2020-09-02 2020-09-09 2020-09-16
+EDA_COLD_MAX_TRANSACTIONS ?= 0
+EDA_SPARSE_MAX_TRANSACTIONS ?= 4
+EDA_TOP_HIERARCHY_VALUES ?= 20
+EDA_TOP_BUSY_DAYS ?= 30
+EDA_REPORT_PATH ?=
+EDA_MARKDOWN_PATH ?=
+
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract eda-report image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export two-tower-retrieval-smoke kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -105,6 +113,7 @@ help:
 	@printf "  make docs          Build Sphinx documentation locally\n\n"
 	@printf "Data:\n"
 	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
+	@printf "  make eda-report    Run Phase -1 EDA and write JSON+Markdown reports\n\n"
 	@printf "  make image-inventory  Map articles to local images and write ignored reports\n\n"
 	@printf "  make article-content-export  Export article text/image paths for encoders\n\n"
 	@printf "  make article-embeddings  Generate optional open-source article embeddings\n\n"
@@ -195,6 +204,16 @@ docs: venv
 
 data-contract: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli validate-data-contract
+
+eda-report: venv
+	@extra_args=""; \
+	if [[ -n "$(EDA_REPORT_PATH)" ]]; then \
+		extra_args="$$extra_args --report-path $(EDA_REPORT_PATH)"; \
+	fi; \
+	if [[ -n "$(EDA_MARKDOWN_PATH)" ]]; then \
+		extra_args="$$extra_args --markdown-path $(EDA_MARKDOWN_PATH)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli eda-report --rolling-cutoffs $(EDA_ROLLING_CUTOFFS) --cold-max-transactions "$(EDA_COLD_MAX_TRANSACTIONS)" --sparse-max-transactions "$(EDA_SPARSE_MAX_TRANSACTIONS)" --top-hierarchy-values "$(EDA_TOP_HIERARCHY_VALUES)" --top-busy-days "$(EDA_TOP_BUSY_DAYS)" $$extra_args
 
 image-inventory: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli inventory-article-images
