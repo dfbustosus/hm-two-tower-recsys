@@ -93,8 +93,22 @@ EDA_TOP_HIERARCHY_VALUES ?= 20
 EDA_TOP_BUSY_DAYS ?= 30
 EDA_REPORT_PATH ?=
 EDA_MARKDOWN_PATH ?=
+PIN_BASELINE_ROLLING_REPORTS_DIR ?=
+PIN_BASELINE_ROLLING_CUTOFFS ?= 2020-09-02 2020-09-09 2020-09-16
+PIN_BASELINE_TARGET_MAP_AT_K ?= 0.02205
+PIN_BASELINE_TARGET_TOLERANCE ?= 0.001
+PIN_BASELINE_MERGE_EXISTING ?= 1
+PIN_BASELINE_REPORT_PATH ?=
+PIN_BASELINE_MARKDOWN_PATH ?=
+PERFECT_RANKER_CUTOFFS ?= 2020-09-02 2020-09-09 2020-09-16
+PERFECT_RANKER_HORIZON_DAYS ?= 7
+PERFECT_RANKER_K ?= 12
+PERFECT_RANKER_CANDIDATE_PATHS ?=
+PERFECT_RANKER_MAX_TARGET_CUSTOMERS ?=
+PERFECT_RANKER_REPORT_PATH ?=
+PERFECT_RANKER_MARKDOWN_PATH ?=
 
-.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract eda-report image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export two-tower-retrieval-smoke kaggle-submit format clean clean-venv
+.PHONY: help venv install-dev check validate lint type test security audit pre-commit docs data-contract eda-report pin-baseline-champion perfect-ranker-ceiling image-inventory article-content-export article-embeddings content-similarity-diagnostics temporal-split validate-submission baseline baseline-submission candidate-diagnostics candidate-export ranker-baseline deterministic-ranker-tuning learned-ranker-baseline rolling-ranker-validation deterministic-ranker-submission learned-ranker-submission two-tower-example-export two-tower-retrieval-smoke kaggle-submit format clean clean-venv
 
 help:
 	@printf "H&M recommender development commands\n\n"
@@ -114,6 +128,8 @@ help:
 	@printf "Data:\n"
 	@printf "  make data-contract Validate local H&M raw data and write an ignored report\n\n"
 	@printf "  make eda-report    Run Phase -1 EDA and write JSON+Markdown reports\n\n"
+	@printf "  make pin-baseline-champion  Pin the MAP@12 baseline champion (Phase -1.2)\n\n"
+	@printf "  make perfect-ranker-ceiling  Compute oracle MAP@K upper bound on current candidate set (Phase 0.1)\n\n"
 	@printf "  make image-inventory  Map articles to local images and write ignored reports\n\n"
 	@printf "  make article-content-export  Export article text/image paths for encoders\n\n"
 	@printf "  make article-embeddings  Generate optional open-source article embeddings\n\n"
@@ -214,6 +230,42 @@ eda-report: venv
 		extra_args="$$extra_args --markdown-path $(EDA_MARKDOWN_PATH)"; \
 	fi; \
 	"$(VENV_PYTHON)" -m hm_recsys.cli eda-report --rolling-cutoffs $(EDA_ROLLING_CUTOFFS) --cold-max-transactions "$(EDA_COLD_MAX_TRANSACTIONS)" --sparse-max-transactions "$(EDA_SPARSE_MAX_TRANSACTIONS)" --top-hierarchy-values "$(EDA_TOP_HIERARCHY_VALUES)" --top-busy-days "$(EDA_TOP_BUSY_DAYS)" $$extra_args
+
+pin-baseline-champion: venv
+	@extra_args=""; \
+	if [[ -n "$(PIN_BASELINE_ROLLING_REPORTS_DIR)" ]]; then \
+		extra_args="$$extra_args --rolling-reports-dir $(PIN_BASELINE_ROLLING_REPORTS_DIR)"; \
+	fi; \
+	if [[ -n "$(PIN_BASELINE_REPORT_PATH)" ]]; then \
+		extra_args="$$extra_args --report-path $(PIN_BASELINE_REPORT_PATH)"; \
+	fi; \
+	if [[ -n "$(PIN_BASELINE_MARKDOWN_PATH)" ]]; then \
+		extra_args="$$extra_args --markdown-path $(PIN_BASELINE_MARKDOWN_PATH)"; \
+	fi; \
+	if [[ -n "$(PIN_BASELINE_MERGE_EXISTING)" ]]; then \
+		extra_args="$$extra_args --merge-existing"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli pin-baseline-champion --rolling-cutoffs $(PIN_BASELINE_ROLLING_CUTOFFS) --target-leaderboard-map-at-k "$(PIN_BASELINE_TARGET_MAP_AT_K)" --target-tolerance "$(PIN_BASELINE_TARGET_TOLERANCE)" $$extra_args
+
+perfect-ranker-ceiling: venv
+	@if [[ -z "$(PERFECT_RANKER_CANDIDATE_PATHS)" ]]; then \
+		echo "error: PERFECT_RANKER_CANDIDATE_PATHS must be set (space-separated paths, one per --cutoffs entry)"; \
+		exit 1; \
+	fi; \
+	extra_args=""; \
+	for path in $(PERFECT_RANKER_CANDIDATE_PATHS); do \
+		extra_args="$$extra_args --candidate-path $$path"; \
+	done; \
+	if [[ -n "$(PERFECT_RANKER_REPORT_PATH)" ]]; then \
+		extra_args="$$extra_args --report-path $(PERFECT_RANKER_REPORT_PATH)"; \
+	fi; \
+	if [[ -n "$(PERFECT_RANKER_MARKDOWN_PATH)" ]]; then \
+		extra_args="$$extra_args --markdown-path $(PERFECT_RANKER_MARKDOWN_PATH)"; \
+	fi; \
+	if [[ -n "$(PERFECT_RANKER_MAX_TARGET_CUSTOMERS)" ]]; then \
+		extra_args="$$extra_args --max-target-customers $(PERFECT_RANKER_MAX_TARGET_CUSTOMERS)"; \
+	fi; \
+	"$(VENV_PYTHON)" -m hm_recsys.cli compute-perfect-ranker-ceiling --cutoffs $(PERFECT_RANKER_CUTOFFS) --horizon-days $(PERFECT_RANKER_HORIZON_DAYS) --k $(PERFECT_RANKER_K) $$extra_args
 
 image-inventory: venv
 	"$(VENV_PYTHON)" -m hm_recsys.cli inventory-article-images
