@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -214,6 +214,57 @@ def collect_validation_labels(
     """
 
     return summarize_temporal_split_with_labels(transactions, split).validation_labels
+
+
+def collect_validation_labels_for_splits(
+    transactions: Iterable[TransactionEvent],
+    splits: Sequence[TemporalSplit],
+) -> dict[date, dict[str, tuple[str, ...]]]:
+    """Collect validation labels for many splits in a single transaction pass.
+
+    Iterating the 31M-row ``transactions_train.csv`` once and bucketing rows
+    against multiple cutoffs is dramatically cheaper than calling
+    :func:`collect_validation_labels` once per cutoff. The function preserves
+    first-seen ordering per customer per split, matching the single-cutoff
+    helper exactly.
+
+    Args:
+        transactions: Transaction events to bucket by date.
+        splits: One or more leakage-safe temporal splits.
+
+    Returns:
+        Mapping ``{split.cutoff: {customer_id: distinct_article_ids}}`` for
+        every split in ``splits``. Cutoffs are unique by construction.
+
+    Raises:
+        ValueError: If ``splits`` is empty or contains duplicate cutoffs.
+    """
+
+    if not splits:
+        raise ValueError("at least one temporal split is required")
+    cutoffs = tuple(split.cutoff for split in splits)
+    if len(set(cutoffs)) != len(cutoffs):
+        raise ValueError("temporal splits must have unique cutoff dates")
+
+    labels_by_cutoff: dict[date, dict[str, list[str]]] = {
+        split.cutoff: defaultdict(list) for split in splits
+    }
+    seen_by_cutoff: dict[date, dict[str, set[str]]] = {
+        split.cutoff: defaultdict(set) for split in splits
+    }
+    for transaction in transactions:
+        for split in splits:
+            if split.cutoff <= transaction.t_dat < split.validation_end:
+                seen = seen_by_cutoff[split.cutoff][transaction.customer_id]
+                if transaction.article_id not in seen:
+                    labels_by_cutoff[split.cutoff][transaction.customer_id].append(
+                        transaction.article_id
+                    )
+                    seen.add(transaction.article_id)
+    return {
+        cutoff: {customer_id: tuple(article_ids) for customer_id, article_ids in mapping.items()}
+        for cutoff, mapping in labels_by_cutoff.items()
+    }
 
 
 def temporal_split_summary_to_dict(summary: TemporalSplitSummary) -> dict[str, int | str]:
