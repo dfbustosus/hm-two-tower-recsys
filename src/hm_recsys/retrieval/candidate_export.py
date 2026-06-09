@@ -60,12 +60,25 @@ from hm_recsys.retrieval.source_names import (
     GARMENT_GROUP_POPULARITY_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
     PRODUCT_CODE_POPULARITY_SOURCE,
+    RECENT_POPULARITY_1D_SOURCE,
+    RECENT_POPULARITY_3D_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
     SEASONAL_POPULARITY_SOURCE,
     TWO_TOWER_RETRIEVAL_SOURCE,
 )
 from hm_recsys.training.two_tower_retrieval import TwoTowerSmokeModel, score_two_tower_candidates
+
+_SHORT_TERM_POPULARITY_SOURCE_BY_LOOKBACK: dict[int, str] = {
+    1: RECENT_POPULARITY_1D_SOURCE,
+    3: RECENT_POPULARITY_3D_SOURCE,
+}
+"""Map known short-term lookbacks to their canonical source names.
+
+Adding a new short-term window is a single-line change here; unknown lookbacks
+are exported under a synthesized ``recent_popularity_<N>d`` name so the data
+stays consumable even before the ranker schema catches up.
+"""
 
 CANDIDATE_EXPORT_HEADER = (
     "customer_id",
@@ -449,6 +462,10 @@ def write_validation_candidate_export(
             two_tower_source_name=two_tower_source_name,
             two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
             k=k,
+            recent_popularity_by_lookback={
+                lookback: articles[:k]
+                for lookback, articles in baseline_sources.recent_popularity_by_lookback.items()
+            },
         ):
             writer.writerow(candidate_record_to_row(record))
             source_row_counts[record.source] += 1
@@ -633,6 +650,7 @@ def _iter_candidate_records(
     two_tower_model: TwoTowerSmokeModel | None = None,
     two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
     two_tower_max_retrieval_articles: int | None = 5000,
+    recent_popularity_by_lookback: Mapping[int, Sequence[str]] | None = None,
 ) -> Iterable[CandidateRecord]:
     """Yield source-specific candidate records in deterministic source order."""
 
@@ -649,6 +667,7 @@ def _iter_candidate_records(
             product_code_index=product_code_index,
             content_similarity_index=content_similarity_index,
             two_tower_model=two_tower_model,
+            recent_popularity_by_lookback=recent_popularity_by_lookback,
             two_tower_source_name=two_tower_source_name,
             two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
             k=k,
@@ -670,6 +689,7 @@ def iter_candidate_records_for_customer(
     two_tower_model: TwoTowerSmokeModel | None = None,
     two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
     two_tower_max_retrieval_articles: int | None = 5000,
+    recent_popularity_by_lookback: Mapping[int, Sequence[str]] | None = None,
 ) -> Iterable[CandidateRecord]:
     """Yield ranker-ready source rows for one customer.
 
@@ -687,6 +707,11 @@ def iter_candidate_records_for_customer(
         two_tower_model: Optional trained two-tower smoke model.
         two_tower_source_name: Source label for two-tower rows.
         two_tower_max_retrieval_articles: Optional article pool cap for two-tower scoring.
+        recent_popularity_by_lookback: Optional short-term recent-popularity
+            rankings keyed by lookback length in days. Each entry produces a
+            ``recent_popularity_<N>d`` source row. Closes the Phase-0 emission
+            gap so ranker features ``has_recent_popularity_1d/3d`` are no
+            longer guaranteed-zero placeholders.
 
     Yields:
         Source-specific candidate records in deterministic source order.
@@ -702,6 +727,19 @@ def iter_candidate_records_for_customer(
         source=RECENT_POPULARITY_SOURCE,
         article_ids=recent_popularity[:k],
     )
+    if recent_popularity_by_lookback is not None:
+        for lookback in sorted(recent_popularity_by_lookback.keys()):
+            articles = recent_popularity_by_lookback[lookback]
+            if not articles:
+                continue
+            source_name = _SHORT_TERM_POPULARITY_SOURCE_BY_LOOKBACK.get(
+                lookback, f"recent_popularity_{lookback}d"
+            )
+            yield from _ranked_article_records(
+                customer_id=customer_id,
+                source=source_name,
+                article_ids=tuple(articles)[:k],
+            )
     yield from _ranked_article_records(
         customer_id=customer_id,
         source=ALL_TIME_POPULARITY_SOURCE,
