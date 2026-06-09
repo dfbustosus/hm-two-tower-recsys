@@ -134,6 +134,46 @@ class ProjectPaths:
 
         return self.artifacts_dir / "eda" / "eda_report.md"
 
+    @property
+    def baseline_champion_report_path(self) -> Path:
+        """Return the canonical champion-pinning JSON path.
+
+        Returns:
+            Path under ``artifacts/baselines/champion_022_config.json``.
+        """
+
+        return self.artifacts_dir / "baselines" / "champion_022_config.json"
+
+    @property
+    def baseline_champion_markdown_path(self) -> Path:
+        """Return the canonical champion-pinning Markdown summary path.
+
+        Returns:
+            Path under ``artifacts/baselines/champion_022_config.md``.
+        """
+
+        return self.artifacts_dir / "baselines" / "champion_022_config.md"
+
+    @property
+    def perfect_ranker_ceiling_report_path(self) -> Path:
+        """Return the canonical perfect-ranker ceiling JSON path.
+
+        Returns:
+            Path under ``artifacts/ranker-baselines/perfect_ranker_ceiling.json``.
+        """
+
+        return self.artifacts_dir / "ranker-baselines" / "perfect_ranker_ceiling.json"
+
+    @property
+    def perfect_ranker_ceiling_markdown_path(self) -> Path:
+        """Return the canonical perfect-ranker ceiling Markdown path.
+
+        Returns:
+            Path under ``artifacts/ranker-baselines/perfect_ranker_ceiling.md``.
+        """
+
+        return self.artifacts_dir / "ranker-baselines" / "perfect_ranker_ceiling.md"
+
     def temporal_split_report_path(self, cutoff: str) -> Path:
         """Return the default temporal split report path for a cutoff.
 
