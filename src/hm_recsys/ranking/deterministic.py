@@ -20,10 +20,10 @@ from hm_recsys.retrieval.source_names import (
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
-    PRODUCT_CODE_POPULARITY_SOURCE,
     IMAGE_SIMILARITY_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
+    PRODUCT_CODE_POPULARITY_SOURCE,
     RECENT_POPULARITY_1D_SOURCE,
     RECENT_POPULARITY_3D_SOURCE,
     RECENT_POPULARITY_SOURCE,
@@ -125,6 +125,30 @@ class DeterministicRankerWeights:
 
 
 DEFAULT_DETERMINISTIC_RANKER_WEIGHTS = DeterministicRankerWeights()
+
+
+@dataclass(frozen=True)
+class DeterministicRankerAdapter:
+    """Concrete :class:`hm_recsys.ranking.protocol.Ranker` for explicit weights.
+
+    Attributes:
+        weights: Explicit deterministic ranker weights to apply per candidate.
+        name: Stable short identifier used in JSON reports. Defaults to
+            ``"deterministic"``.
+    """
+
+    weights: DeterministicRankerWeights = DEFAULT_DETERMINISTIC_RANKER_WEIGHTS
+    name: str = "deterministic"
+
+    def rank_customer_batch(
+        self,
+        features_by_customer: Mapping[str, Mapping[str, CandidateFeatures]],
+        *,
+        k: int,
+    ) -> Mapping[str, tuple[str, ...]]:
+        """Rank candidates using deterministic weighted source aggregation."""
+
+        return rank_candidates_by_customer(features_by_customer, k=k, weights=self.weights)
 
 
 @dataclass
