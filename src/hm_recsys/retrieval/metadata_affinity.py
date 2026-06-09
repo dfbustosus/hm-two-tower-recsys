@@ -15,6 +15,7 @@ from hm_recsys.evaluation.temporal import TemporalSplit
 from hm_recsys.retrieval.co_visitation import DEFAULT_MAX_HISTORY_ITEMS
 
 GARMENT_GROUP_COLUMN = "garment_group_name"
+PRODUCT_CODE_COLUMN = "product_code"
 UNKNOWN_ARTICLE_ATTRIBUTE = "unknown"
 
 
@@ -202,6 +203,7 @@ def _rank_attribute_counts(
 
 __all__ = [
     "GARMENT_GROUP_COLUMN",
+    "PRODUCT_CODE_COLUMN",
     "UNKNOWN_ARTICLE_ATTRIBUTE",
     "ArticleAttributePopularityCandidate",
     "ArticleAttributePopularityIndex",
