@@ -20,6 +20,7 @@ from hm_recsys.retrieval.source_names import (
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
+    PRODUCT_CODE_POPULARITY_SOURCE,
     IMAGE_SIMILARITY_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
@@ -27,6 +28,7 @@ from hm_recsys.retrieval.source_names import (
     RECENT_POPULARITY_3D_SOURCE,
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
+    SEASONAL_POPULARITY_SOURCE,
     TEXT_SIMILARITY_SOURCE,
     TWO_TOWER_MULTIMODAL_SOURCE,
     TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE,
@@ -66,6 +68,9 @@ class DeterministicRankerWeights:
         all_time_popularity_score_weight: Weight for all-time popularity reciprocal rank.
         co_visitation_presence_weight: Additive weight for co-visitation candidates.
         co_visitation_score_weight: Weight for ``log1p(co_visitation_score)``.
+        seasonal_popularity_presence_weight: Additive weight for shifted-window
+            seasonal popularity candidates.
+        seasonal_popularity_score_weight: Weight for seasonal popularity score.
         age_segment_popularity_presence_weight: Additive weight for age-segment
             popularity candidates.
         age_segment_popularity_score_weight: Weight for segment-popularity score.
@@ -99,10 +104,14 @@ class DeterministicRankerWeights:
     all_time_popularity_score_weight: float = 0.15
     co_visitation_presence_weight: float = 0.35
     co_visitation_score_weight: float = 0.10
+    seasonal_popularity_presence_weight: float = 0.10
+    seasonal_popularity_score_weight: float = 0.10
     age_segment_popularity_presence_weight: float = 0.30
     age_segment_popularity_score_weight: float = 0.20
     garment_group_popularity_presence_weight: float = 0.40
     garment_group_popularity_score_weight: float = 0.25
+    product_code_popularity_presence_weight: float = 0.60
+    product_code_popularity_score_weight: float = 0.40
     content_similarity_presence_weight: float = 0.10
     content_similarity_score_weight: float = 0.05
     two_tower_retrieval_presence_weight: float = 0.10
@@ -138,6 +147,8 @@ class CandidateFeatures:
         all_time_popularity_score: Source score from all-time popularity.
         co_visitation_rank: Optional source rank from co-visitation.
         co_visitation_score: Source score from co-visitation.
+        seasonal_popularity_rank: Optional source rank from shifted-window seasonal popularity.
+        seasonal_popularity_score: Source score from seasonal popularity.
         age_segment_popularity_rank: Optional source rank from age-segment popularity.
         age_segment_popularity_score: Source score from age-segment popularity.
         garment_group_popularity_rank: Optional source rank from garment-group popularity.
@@ -169,10 +180,14 @@ class CandidateFeatures:
     all_time_popularity_score: float = 0.0
     co_visitation_rank: int | None = None
     co_visitation_score: float = 0.0
+    seasonal_popularity_rank: int | None = None
+    seasonal_popularity_score: float = 0.0
     age_segment_popularity_rank: int | None = None
     age_segment_popularity_score: float = 0.0
     garment_group_popularity_rank: int | None = None
     garment_group_popularity_score: float = 0.0
+    product_code_popularity_rank: int | None = None
+    product_code_popularity_score: float = 0.0
     content_similarity_rank: int | None = None
     content_similarity_score: float = 0.0
     two_tower_retrieval_rank: int | None = None
@@ -231,6 +246,15 @@ class CandidateFeatures:
                 self.co_visitation_rank, record.source_rank
             )
             self.co_visitation_score = max(self.co_visitation_score, record.source_score)
+        elif record.source == SEASONAL_POPULARITY_SOURCE:
+            self.seasonal_popularity_rank = _min_optional_rank(
+                self.seasonal_popularity_rank,
+                record.source_rank,
+            )
+            self.seasonal_popularity_score = max(
+                self.seasonal_popularity_score,
+                record.source_score,
+            )
         elif record.source == AGE_SEGMENT_POPULARITY_SOURCE:
             self.age_segment_popularity_rank = _min_optional_rank(
                 self.age_segment_popularity_rank,
@@ -247,6 +271,15 @@ class CandidateFeatures:
             )
             self.garment_group_popularity_score = max(
                 self.garment_group_popularity_score,
+                record.source_score,
+            )
+        elif record.source == PRODUCT_CODE_POPULARITY_SOURCE:
+            self.product_code_popularity_rank = _min_optional_rank(
+                self.product_code_popularity_rank,
+                record.source_rank,
+            )
+            self.product_code_popularity_score = max(
+                self.product_code_popularity_score,
                 record.source_score,
             )
         elif record.source == TWO_TOWER_RETRIEVAL_SOURCE:
@@ -310,6 +343,12 @@ class CandidateFeatures:
         return self.co_visitation_rank is not None
 
     @property
+    def has_seasonal_popularity(self) -> bool:
+        """Return whether shifted-window seasonal popularity emitted this pair."""
+
+        return self.seasonal_popularity_rank is not None
+
+    @property
     def has_age_segment_popularity(self) -> bool:
         """Return whether age-segment popularity emitted this pair."""
 
@@ -320,6 +359,12 @@ class CandidateFeatures:
         """Return whether garment-group affinity popularity emitted this pair."""
 
         return self.garment_group_popularity_rank is not None
+
+    @property
+    def has_product_code_popularity(self) -> bool:
+        """Return whether product-code affinity popularity emitted this pair."""
+
+        return self.product_code_popularity_rank is not None
 
     @property
     def has_content_similarity(self) -> bool:
@@ -488,6 +533,9 @@ def score_candidate(
     if features.has_co_visitation:
         score += weights.co_visitation_presence_weight
         score += weights.co_visitation_score_weight * log1p(features.co_visitation_score)
+    if features.has_seasonal_popularity:
+        score += weights.seasonal_popularity_presence_weight
+        score += weights.seasonal_popularity_score_weight * features.seasonal_popularity_score
     if features.has_age_segment_popularity:
         score += weights.age_segment_popularity_presence_weight
         score += weights.age_segment_popularity_score_weight * features.age_segment_popularity_score
@@ -495,6 +543,11 @@ def score_candidate(
         score += weights.garment_group_popularity_presence_weight
         score += (
             weights.garment_group_popularity_score_weight * features.garment_group_popularity_score
+        )
+    if features.has_product_code_popularity:
+        score += weights.product_code_popularity_presence_weight
+        score += (
+            weights.product_code_popularity_score_weight * features.product_code_popularity_score
         )
     if features.has_content_similarity:
         score += weights.content_similarity_presence_weight
@@ -717,6 +770,8 @@ def _source_rank(features: CandidateFeatures, source: str) -> int | None:
         return features.all_time_popularity_rank
     if source == CO_VISITATION_SOURCE:
         return features.co_visitation_rank
+    if source == SEASONAL_POPULARITY_SOURCE:
+        return features.seasonal_popularity_rank
     if source == AGE_SEGMENT_POPULARITY_SOURCE:
         return features.age_segment_popularity_rank
     if source == GARMENT_GROUP_POPULARITY_SOURCE:
