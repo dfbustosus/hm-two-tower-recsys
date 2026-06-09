@@ -249,3 +249,4 @@ pip-audit-report.*
 *.ckpt
 *.onnx
 *.faiss
+*.cursor/
