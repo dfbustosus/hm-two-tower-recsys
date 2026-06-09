@@ -37,6 +37,17 @@ ARTICLE_1 = "0000000001"
 ARTICLE_2 = "0000000002"
 
 
+def test_linear_ranker_num_sources_matches_feature_vector_emission() -> None:
+    from hm_recsys.ranking.linear import LINEAR_RANKER_NUM_SOURCES
+
+    has_count = sum(1 for name in LINEAR_FEATURE_NAMES if name.startswith("has_"))
+    assert has_count == LINEAR_RANKER_NUM_SOURCES
+    assert LINEAR_RANKER_NUM_SOURCES > 9, (
+        "LINEAR_RANKER_NUM_SOURCES must reflect the post-Phase-0.6 source count; "
+        "if you add or remove sources, the denominator should follow automatically."
+    )
+
+
 def test_previous_window_split_is_non_overlapping() -> None:
     evaluation_split = TemporalSplit.from_isoformat("2020-01-15", horizon_days=7)
 
@@ -96,7 +107,9 @@ def test_feature_vector_matches_schema() -> None:
     assert vector[LINEAR_FEATURE_NAMES.index("product_code_popularity_score")] == pytest.approx(
         0.55
     )
-    assert vector[LINEAR_FEATURE_NAMES.index("product_code_popularity_rank_reciprocal")] == pytest.approx(1.0 / 3)
+    assert vector[
+        LINEAR_FEATURE_NAMES.index("product_code_popularity_rank_reciprocal")
+    ] == pytest.approx(1.0 / 3)
     assert vector[LINEAR_FEATURE_NAMES.index("has_content_similarity")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("content_similarity_score")] == pytest.approx(0.8)
     assert vector[LINEAR_FEATURE_NAMES.index("has_two_tower_retrieval")] == 1.0
