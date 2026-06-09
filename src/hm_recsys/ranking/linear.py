@@ -20,6 +20,10 @@ from hm_recsys.ranking.deterministic import (
     iter_candidate_records_from_csv,
     rank_candidates_by_customer,
 )
+from hm_recsys.ranking.protocol import (
+    PerCustomerCandidateFeatures,
+    PerCustomerRankedArticles,
+)
 from hm_recsys.retrieval.candidate_export import CandidateRecord
 
 LINEAR_FEATURE_NAMES = (
@@ -66,6 +70,18 @@ LINEAR_FEATURE_NAMES = (
     "source_count_scaled",
     "best_rank_reciprocal",
 )
+
+LINEAR_RANKER_NUM_SOURCES: int = sum(
+    1 for name in LINEAR_FEATURE_NAMES if name.startswith("has_")
+)
+"""Number of retrieval sources scored by the linear ranker.
+
+Used to normalize ``CandidateFeatures.source_count`` into ``[0, 1]`` so the
+``source_count_scaled`` feature does not drown the rest of the weight vector
+once we add more retrieval sources. The old hard-coded ``/ 9.0`` divisor was a
+real magic constant called out in the SDD plan (P0.6) and made the feature
+~44% too large after the recent-popularity 1d/3d additions.
+"""
 
 
 @dataclass(frozen=True)
@@ -299,7 +315,7 @@ def feature_vector(features: CandidateFeatures) -> tuple[float, ...]:
         float(features.has_two_tower_retrieval_latest_customer),
         features.two_tower_retrieval_latest_customer_score,
         _rank_reciprocal(features.two_tower_retrieval_latest_customer_rank),
-        features.source_count / 9.0,
+        features.source_count / max(1, LINEAR_RANKER_NUM_SOURCES),
         _rank_reciprocal(features.best_rank),
     )
 
@@ -423,6 +439,33 @@ def rank_with_linear_model(
         )
         predictions[customer_id] = tuple(features.article_id for features in ranked_features[:k])
     return predictions
+
+
+@dataclass(frozen=True)
+class LinearRankerAdapter:
+    """Concrete :class:`hm_recsys.ranking.protocol.Ranker` for the linear model.
+
+    The adapter is intentionally stateless beyond the trained model so it can
+    be cheaply reused across cutoffs/customers and serialized through DI-style
+    submission scaffolding without leaking training-time configuration.
+
+    Attributes:
+        model: Trained linear ranker model.
+        name: Stable short identifier used in JSON reports. Defaults to
+            ``"linear"`` to mirror the existing ranker registry.
+    """
+
+    model: LinearRankerModel
+    name: str = "linear"
+
+    def rank_customer_batch(
+        self, features_by_customer: PerCustomerCandidateFeatures, *, k: int
+    ) -> PerCustomerRankedArticles:
+        """Score and rank candidates for every customer in ``features_by_customer``."""
+
+        return rank_with_linear_model(features_by_customer, model=self.model, k=k)
+
+
 
 
 def evaluate_linear_ranker_from_csv(
