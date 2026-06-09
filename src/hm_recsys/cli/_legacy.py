@@ -10,6 +10,16 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
 
+from hm_recsys.baselines.champion import (
+    DEFAULT_BASELINE_TARGET_MAP_AT_K,
+    DEFAULT_BASELINE_TARGET_TOLERANCE,
+    build_baseline_champion_report,
+    discover_rolling_validation_candidates,
+    load_baseline_champion_report,
+    merge_candidates,
+    write_baseline_champion_markdown,
+    write_baseline_champion_report,
+)
 from hm_recsys.data.contracts import validate_hm_data_contract, write_data_contract_report
 from hm_recsys.data.io import (
     iter_transaction_events,
@@ -36,6 +46,12 @@ from hm_recsys.embeddings.generation import (
     write_article_embedding_cache_from_content_export,
 )
 from hm_recsys.embeddings.image_inventory import write_article_image_inventory
+from hm_recsys.evaluation.perfect_ranker import (
+    PerfectRankerCutoffInput,
+    build_perfect_ranker_ceiling_report,
+    write_perfect_ranker_ceiling_markdown,
+    write_perfect_ranker_ceiling_report,
+)
 from hm_recsys.evaluation.submission import (
     validate_submission_file,
     write_submission_file,
@@ -43,6 +59,7 @@ from hm_recsys.evaluation.submission import (
 )
 from hm_recsys.evaluation.temporal import (
     TemporalSplit,
+    collect_validation_labels_for_splits,
     summarize_temporal_split,
     summarize_temporal_split_with_labels,
     write_temporal_split_summary,
@@ -239,6 +256,143 @@ def build_parser() -> argparse.ArgumentParser:
         help="Markdown report path. Defaults to artifacts/eda/eda_report.md.",
     )
     eda_parser.set_defaults(handler=_handle_eda_report)
+
+    pin_baseline_parser = subparsers.add_parser(
+        "pin-baseline-champion",
+        help=(
+            "Pin the current MAP@12 baseline champion by inventorying existing "
+            "rolling-validation reports and (optionally) attaching user-supplied "
+            "Kaggle leaderboard scores."
+        ),
+    )
+    pin_baseline_parser.add_argument(
+        "--rolling-reports-dir",
+        type=Path,
+        default=None,
+        help="Directory of rolling-validation JSON reports to scan.",
+    )
+    pin_baseline_parser.add_argument(
+        "--rolling-cutoffs",
+        nargs="+",
+        default=list(DEFAULT_ROLLING_CUTOFFS),
+        metavar="YYYY-MM-DD",
+        help=(
+            "Restrict discovery to rolling reports whose cutoffs match exactly. "
+            f"Defaults to {' '.join(DEFAULT_ROLLING_CUTOFFS)}."
+        ),
+    )
+    pin_baseline_parser.add_argument(
+        "--target-leaderboard-map-at-k",
+        type=float,
+        default=DEFAULT_BASELINE_TARGET_MAP_AT_K,
+        help=(
+            "Kaggle leaderboard MAP@K to reproduce. "
+            f"Defaults to {DEFAULT_BASELINE_TARGET_MAP_AT_K}."
+        ),
+    )
+    pin_baseline_parser.add_argument(
+        "--target-tolerance",
+        type=float,
+        default=DEFAULT_BASELINE_TARGET_TOLERANCE,
+        help=(
+            "Absolute MAP@K tolerance for the leaderboard match check. "
+            f"Defaults to {DEFAULT_BASELINE_TARGET_TOLERANCE}."
+        ),
+    )
+    pin_baseline_parser.add_argument(
+        "--merge-existing",
+        action="store_true",
+        help=(
+            "Preserve user-supplied fields (LB scores, notes) from the existing "
+            "champion report at the destination path when it already exists."
+        ),
+    )
+    pin_baseline_parser.add_argument("--project-root", type=Path, default=None)
+    pin_baseline_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=None,
+        help="JSON output path. Defaults to artifacts/baselines/champion_022_config.json.",
+    )
+    pin_baseline_parser.add_argument(
+        "--markdown-path",
+        type=Path,
+        default=None,
+        help="Markdown output path. Defaults to artifacts/baselines/champion_022_config.md.",
+    )
+    pin_baseline_parser.set_defaults(handler=_handle_pin_baseline_champion)
+
+    perfect_ranker_parser = subparsers.add_parser(
+        "compute-perfect-ranker-ceiling",
+        help=(
+            "Compute the perfect-ranker (oracle) MAP@K ceiling on the existing "
+            "candidate set for a rolling cutoff schedule. Quantifies the share of "
+            "the MAP gap that is reachable by ranker improvements alone."
+        ),
+    )
+    perfect_ranker_parser.add_argument(
+        "--cutoffs",
+        nargs="+",
+        default=list(DEFAULT_ROLLING_CUTOFFS),
+        metavar="YYYY-MM-DD",
+        help=(
+            "Evaluation cutoffs. Defaults to the canonical rolling schedule "
+            f"({' '.join(DEFAULT_ROLLING_CUTOFFS)})."
+        ),
+    )
+    perfect_ranker_parser.add_argument(
+        "--candidate-path",
+        action="append",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "Candidate CSV path for one cutoff. Repeat the flag to provide one "
+            "path per cutoff. Order must match --cutoffs."
+        ),
+    )
+    perfect_ranker_parser.add_argument(
+        "--horizon-days",
+        type=int,
+        default=7,
+        help="Validation label horizon in days. Defaults to 7.",
+    )
+    perfect_ranker_parser.add_argument(
+        "--k",
+        type=int,
+        default=12,
+        help="Recommendation depth. Defaults to 12.",
+    )
+    perfect_ranker_parser.add_argument(
+        "--max-target-customers",
+        type=int,
+        default=None,
+        help=(
+            "Optional deterministic smoke cap mirrored from the candidate-export "
+            "command. Restricts the validation-label sample so MAP/ceiling are "
+            "computed on the same customer universe used to build the candidates."
+        ),
+    )
+    perfect_ranker_parser.add_argument("--project-root", type=Path, default=None)
+    perfect_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    perfect_ranker_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=None,
+        help=(
+            "JSON output path. Defaults to "
+            "artifacts/ranker-baselines/perfect_ranker_ceiling.json."
+        ),
+    )
+    perfect_ranker_parser.add_argument(
+        "--markdown-path",
+        type=Path,
+        default=None,
+        help=(
+            "Markdown output path. Defaults to "
+            "artifacts/ranker-baselines/perfect_ranker_ceiling.md."
+        ),
+    )
+    perfect_ranker_parser.set_defaults(handler=_handle_compute_perfect_ranker_ceiling)
 
     split_parser = subparsers.add_parser(
         "summarize-temporal-split",
@@ -614,6 +768,15 @@ def build_parser() -> argparse.ArgumentParser:
     lightgbm_ranker_parser.add_argument("--seed", type=int, default=42)
     lightgbm_ranker_parser.add_argument("--num-threads", type=int, default=4)
     lightgbm_ranker_parser.add_argument("--chunk-customers", type=int, default=2000)
+    lightgbm_ranker_parser.add_argument(
+        "--objective",
+        choices=("lambdarank", "rank_xendcg"),
+        default="lambdarank",
+        help=(
+            "LightGBM ranking objective. 'rank_xendcg' (XE-NDCG) typically "
+            "outperforms 'lambdarank' on long candidate lists."
+        ),
+    )
     lightgbm_ranker_parser.add_argument(
         "--progress",
         action="store_true",
@@ -1431,6 +1594,169 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.handler(args))
+
+
+def _handle_pin_baseline_champion(args: argparse.Namespace) -> int:
+    """Handle the ``pin-baseline-champion`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` when at least one candidate is registered; ``1`` otherwise.
+    """
+
+    paths = ProjectPaths.from_root(root=args.project_root)
+    rolling_reports_dir = args.rolling_reports_dir or (paths.artifacts_dir / "ranker-baselines")
+    if not rolling_reports_dir.is_absolute():
+        rolling_reports_dir = paths.root / rolling_reports_dir
+    cutoffs = tuple(args.rolling_cutoffs) if args.rolling_cutoffs else None
+    report_path = args.report_path or paths.baseline_champion_report_path
+    markdown_path = args.markdown_path or paths.baseline_champion_markdown_path
+    if not report_path.is_absolute():
+        report_path = paths.root / report_path
+    if not markdown_path.is_absolute():
+        markdown_path = paths.root / markdown_path
+
+    discovered = discover_rolling_validation_candidates(
+        rolling_reports_dir=rolling_reports_dir,
+        cutoffs=cutoffs,
+    )
+    candidates = discovered
+    extra_warnings: list[str] = []
+    if args.merge_existing and report_path.exists():
+        existing = load_baseline_champion_report(report_path)
+        candidates = merge_candidates(existing.candidates, discovered)
+    if not discovered:
+        extra_warnings.append("no_rolling_reports_discovered")
+
+    report = build_baseline_champion_report(
+        candidates=candidates,
+        target_leaderboard_map_at_k=args.target_leaderboard_map_at_k,
+        target_tolerance=args.target_tolerance,
+        extra_warnings=extra_warnings,
+    )
+    written_json = write_baseline_champion_report(report, report_path)
+    written_markdown = write_baseline_champion_markdown(report, markdown_path)
+
+    print(f"Rolling reports directory: {rolling_reports_dir}")
+    print(f"Discovered candidates: {len(discovered)}")
+    print(f"Total registered candidates: {len(report.candidates)}")
+    if report.champion_index is None:
+        print("Champion: (none selected)")
+    else:
+        champion = report.candidates[report.champion_index]
+        print(f"Champion: {champion.name}")
+        if champion.offline_metrics is not None:
+            print(f"  Offline rolling mean MAP@K: " f"{champion.offline_metrics.mean_map_at_k:.5f}")
+        if champion.leaderboard_public_map_at_k is not None:
+            print(f"  Kaggle public LB MAP@K: {champion.leaderboard_public_map_at_k:.5f}")
+    print(f"Rationale: {report.champion_rationale}")
+    if report.warnings:
+        print("Warnings:")
+        for warning in report.warnings:
+            print(f"  - {warning}")
+    print(f"JSON report written to: {written_json}")
+    print(f"Markdown report written to: {written_markdown}")
+    return 0 if report.candidates else 1
+
+
+def _handle_compute_perfect_ranker_ceiling(args: argparse.Namespace) -> int:
+    """Handle the ``compute-perfect-ranker-ceiling`` subcommand.
+
+    The handler refuses to silently mismatch ``--cutoffs`` and ``--candidate-path``
+    so the reported ceiling is always traceable to a specific candidate file.
+    """
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    cutoffs = tuple(args.cutoffs)
+    if not cutoffs:
+        print("error: at least one --cutoff is required")
+        return 1
+    candidate_paths_arg = list(args.candidate_path or ())
+    if not candidate_paths_arg:
+        print("error: at least one --candidate-path is required")
+        return 1
+    if len(candidate_paths_arg) != len(cutoffs):
+        print(
+            "error: number of --candidate-path values must match number of "
+            f"--cutoffs (got {len(candidate_paths_arg)} paths for {len(cutoffs)} cutoffs)"
+        )
+        return 1
+
+    submission_customer_ids = set(load_submission_customer_ids(paths.raw_data_dir))
+    resolved_candidate_paths: list[Path] = []
+    splits: list[TemporalSplit] = []
+    for cutoff, raw_candidate_path in zip(cutoffs, candidate_paths_arg, strict=True):
+        candidate_path = (
+            raw_candidate_path
+            if raw_candidate_path.is_absolute()
+            else (paths.root / raw_candidate_path)
+        )
+        if not candidate_path.exists():
+            print(f"error: candidate CSV not found: {candidate_path}")
+            return 1
+        resolved_candidate_paths.append(candidate_path)
+        splits.append(
+            TemporalSplit(cutoff=date.fromisoformat(cutoff), horizon_days=int(args.horizon_days))
+        )
+
+    labels_by_cutoff = collect_validation_labels_for_splits(
+        iter_transaction_events(paths.raw_data_dir), splits
+    )
+    bundles: list[PerfectRankerCutoffInput] = []
+    for cutoff, candidate_path, split in zip(
+        cutoffs, resolved_candidate_paths, splits, strict=True
+    ):
+        raw_labels = labels_by_cutoff[split.cutoff]
+        target_ids = select_validation_label_customer_ids(
+            validation_labels=raw_labels,
+            submission_customer_ids=submission_customer_ids,
+            max_target_customers=args.max_target_customers,
+        )
+        filtered_labels = {customer_id: raw_labels[customer_id] for customer_id in target_ids}
+        bundles.append(
+            PerfectRankerCutoffInput(
+                cutoff=cutoff,
+                candidate_path=candidate_path,
+                validation_labels=filtered_labels,
+            )
+        )
+
+    report = build_perfect_ranker_ceiling_report(bundles, k=int(args.k))
+
+    report_path = args.report_path or paths.perfect_ranker_ceiling_report_path
+    markdown_path = args.markdown_path or paths.perfect_ranker_ceiling_markdown_path
+    if not report_path.is_absolute():
+        report_path = paths.root / report_path
+    if not markdown_path.is_absolute():
+        markdown_path = paths.root / markdown_path
+    written_json = write_perfect_ranker_ceiling_report(report, report_path)
+    written_markdown = write_perfect_ranker_ceiling_markdown(report, markdown_path)
+
+    print(f"Cutoffs evaluated: {', '.join(report.cutoffs)}")
+    print(f"Mean oracle MAP@{report.k}: {report.mean_oracle_map_at_k:.5f}")
+    print(f"  min: {report.min_oracle_map_at_k:.5f}, max: {report.max_oracle_map_at_k:.5f}")
+    print(f"Mean oracle Recall@{report.k}: {report.mean_oracle_recall_at_k:.5f}")
+    print(
+        "Mean candidate label coverage (unbounded by k): "
+        f"{report.mean_candidate_label_coverage:.5f}"
+    )
+    for ceiling in report.per_cutoff:
+        print(
+            f"  {ceiling.cutoff}: oracle MAP@{report.k}="
+            f"{ceiling.mean_oracle_map_at_k:.5f} "
+            f"recall={ceiling.mean_oracle_recall_at_k:.5f} "
+            f"evaluated={ceiling.evaluated_customers} "
+            f"no-candidates={ceiling.customers_without_any_candidate}"
+        )
+    if report.warnings:
+        print("Warnings:")
+        for warning in report.warnings:
+            print(f"  - {warning}")
+    print(f"JSON report written to: {written_json}")
+    print(f"Markdown report written to: {written_markdown}")
+    return 0
 
 
 def _handle_eda_report(args: argparse.Namespace) -> int:
@@ -2733,6 +3059,7 @@ def _handle_evaluate_lightgbm_behavioral_ranker(args: argparse.Namespace) -> int
         num_threads=args.num_threads,
         chunk_customers=args.chunk_customers,
         deterministic_weights=_lightgbm_behavioral_ranker_weights_from_args(args),
+        objective=args.objective,
     )
     report = evaluate_lightgbm_behavioral_ranker_from_csv(
         transaction_iter_factory=lambda: iter_transactions(paths.raw_data_dir),
