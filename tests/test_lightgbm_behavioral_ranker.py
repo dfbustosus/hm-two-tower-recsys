@@ -45,6 +45,7 @@ def test_lightgbm_behavioral_feature_vector_matches_schema() -> None:
         "deterministic_score",
         *BEHAVIORAL_FEATURE_NAMES,
     ) == LIGHTGBM_BEHAVIORAL_FEATURE_NAMES
+    assert len(set(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES)) == len(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES)
     assert len(vector) == len(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES)
     assert vector[LINEAR_FEATURE_NAMES.index("has_repeat")] == 1.0
     assert vector[LIGHTGBM_BEHAVIORAL_FEATURE_NAMES.index("deterministic_score")] > 0.0
