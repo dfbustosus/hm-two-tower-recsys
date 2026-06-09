@@ -373,6 +373,7 @@ def build_linear_ranker_submission_predictions(
                 all_time_popularity=baseline_sources.all_time_popularity,
                 co_visitation_index=co_visitation_index,
                 k=candidate_k,
+                recent_popularity_by_lookback=baseline_sources.recent_popularity_by_lookback,
             )
         )
         source_row_counts.update(record.source for record in records)
@@ -619,6 +620,7 @@ def build_deterministic_ranker_submission_predictions(
                 two_tower_source_name=two_tower_source_name,
                 two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
                 k=candidate_k,
+                recent_popularity_by_lookback=baseline_sources.recent_popularity_by_lookback,
             )
         )
         source_row_counts.update(record.source for record in records)
@@ -895,6 +897,7 @@ def build_lightgbm_behavioral_ranker_submission_predictions(
                 two_tower_source_name=two_tower_source_name,
                 two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
                 k=candidate_k,
+                recent_popularity_by_lookback=baseline_sources.recent_popularity_by_lookback,
             )
         )
         source_row_counts.update(record.source for record in records)
