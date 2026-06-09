@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
@@ -13,9 +13,18 @@ from typing import cast
 from hm_recsys.data.contracts import validate_hm_data_contract, write_data_contract_report
 from hm_recsys.data.io import (
     iter_transaction_events,
+    iter_transactions,
     load_article_ids,
     load_submission_customer_ids,
     load_submission_customer_ids_in_order,
+)
+from hm_recsys.eda import (
+    DEFAULT_ROLLING_CUTOFFS,
+    EdaReportConfig,
+    EdaSegmentThresholds,
+    build_eda_report,
+    write_eda_report,
+    write_eda_report_markdown,
 )
 from hm_recsys.embeddings.article_content import (
     build_article_popularity_priority,
@@ -39,6 +48,7 @@ from hm_recsys.evaluation.temporal import (
     write_temporal_split_summary,
 )
 from hm_recsys.infrastructure.paths import ProjectPaths
+from hm_recsys.ranking.behavioral import load_article_attribute_maps
 from hm_recsys.ranking.deterministic import (
     DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
     DeterministicRankerWeights,
@@ -54,7 +64,9 @@ from hm_recsys.ranking.deterministic_tuning import (
 )
 from hm_recsys.ranking.lightgbm_behavioral import (
     LightGBMBehavioralRankerConfig,
+    LightGBMBehavioralTrainingWindow,
     evaluate_lightgbm_behavioral_ranker_from_csv,
+    train_lightgbm_behavioral_ranker_from_windows,
     write_lightgbm_behavioral_ranker_report,
 )
 from hm_recsys.ranking.linear import (
@@ -73,6 +85,7 @@ from hm_recsys.ranking.submission import (
     build_deterministic_ranker_submission_predictions,
     build_deterministic_ranker_submission_report,
     build_learned_linear_ranker_submission_report,
+    build_lightgbm_behavioral_ranker_submission_predictions,
     build_linear_ranker_submission_predictions,
     write_deterministic_ranker_submission_report,
     write_learned_linear_ranker_submission_report,
@@ -103,6 +116,10 @@ from hm_recsys.retrieval.content_similarity_diagnostics import (
     write_content_similarity_diagnostics_report,
 )
 from hm_recsys.retrieval.metadata_affinity import load_article_attribute_values
+from hm_recsys.retrieval.seasonality import (
+    DEFAULT_SEASONAL_SHIFT_DAYS,
+    DEFAULT_SEASONAL_WINDOW_DAYS,
+)
 from hm_recsys.retrieval.segment_popularity import (
     DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
     load_customer_age_segments,
@@ -164,6 +181,64 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report path. Defaults to artifacts/data-contract/data_contract_report.json.",
     )
     validate_parser.set_defaults(handler=_handle_validate_data_contract)
+
+    eda_parser = subparsers.add_parser(
+        "eda-report",
+        help=(
+            "Compute the Phase -1 EDA report covering transaction volume, channel "
+            "mix, customer history depth, article hierarchy fanout, repeat-purchase "
+            "structure, and cold-user share across rolling cutoffs."
+        ),
+    )
+    eda_parser.add_argument(
+        "--rolling-cutoffs",
+        nargs="+",
+        default=list(DEFAULT_ROLLING_CUTOFFS),
+        metavar="YYYY-MM-DD",
+        help=(
+            "Rolling validation cutoffs used to compute cold-user share. "
+            f"Defaults to {' '.join(DEFAULT_ROLLING_CUTOFFS)}."
+        ),
+    )
+    eda_parser.add_argument(
+        "--cold-max-transactions",
+        type=int,
+        default=EdaSegmentThresholds().cold_max_transactions,
+        help="Maximum transaction count for the cold segment. Defaults to 0.",
+    )
+    eda_parser.add_argument(
+        "--sparse-max-transactions",
+        type=int,
+        default=EdaSegmentThresholds().sparse_max_transactions,
+        help="Maximum transaction count for the sparse segment. Defaults to 4.",
+    )
+    eda_parser.add_argument(
+        "--top-hierarchy-values",
+        type=int,
+        default=20,
+        help="Maximum number of values surfaced per hierarchy column. Defaults to 20.",
+    )
+    eda_parser.add_argument(
+        "--top-busy-days",
+        type=int,
+        default=30,
+        help="Number of busiest transaction days surfaced. Defaults to 30.",
+    )
+    eda_parser.add_argument("--project-root", type=Path, default=None)
+    eda_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    eda_parser.add_argument(
+        "--report-path",
+        type=Path,
+        default=None,
+        help="JSON report path. Defaults to artifacts/eda/eda_report.json.",
+    )
+    eda_parser.add_argument(
+        "--markdown-path",
+        type=Path,
+        default=None,
+        help="Markdown report path. Defaults to artifacts/eda/eda_report.md.",
+    )
+    eda_parser.set_defaults(handler=_handle_eda_report)
 
     split_parser = subparsers.add_parser(
         "summarize-temporal-split",
@@ -306,8 +381,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for smoke exports.",
     )
+    _add_seasonal_popularity_arguments(candidate_export_parser)
     _add_age_segment_popularity_arguments(candidate_export_parser)
     _add_garment_group_popularity_arguments(candidate_export_parser)
+    _add_product_code_popularity_arguments(candidate_export_parser)
     _add_content_similarity_candidate_arguments(candidate_export_parser)
     _add_two_tower_candidate_arguments(candidate_export_parser)
     candidate_export_parser.add_argument("--project-root", type=Path, default=None)
@@ -356,8 +433,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for smoke evaluations.",
     )
+    _add_seasonal_popularity_arguments(ranker_parser)
     _add_age_segment_popularity_arguments(ranker_parser)
     _add_garment_group_popularity_arguments(ranker_parser)
+    _add_product_code_popularity_arguments(ranker_parser)
     _add_content_similarity_candidate_arguments(ranker_parser)
     _add_two_tower_candidate_arguments(ranker_parser)
     _add_two_tower_ranker_weight_arguments(ranker_parser)
@@ -427,8 +506,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to tune and eval windows.",
     )
+    _add_seasonal_popularity_arguments(tuned_ranker_parser)
     _add_age_segment_popularity_arguments(tuned_ranker_parser)
     _add_garment_group_popularity_arguments(tuned_ranker_parser)
+    _add_product_code_popularity_arguments(tuned_ranker_parser)
     _add_content_similarity_candidate_arguments(tuned_ranker_parser)
     _add_two_tower_candidate_arguments(tuned_ranker_parser)
     _add_two_tower_ranker_weight_arguments(tuned_ranker_parser)
@@ -489,8 +570,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to train and eval windows.",
     )
+    _add_seasonal_popularity_arguments(learned_ranker_parser)
     _add_age_segment_popularity_arguments(learned_ranker_parser)
     _add_garment_group_popularity_arguments(learned_ranker_parser)
+    _add_product_code_popularity_arguments(learned_ranker_parser)
     _add_content_similarity_candidate_arguments(learned_ranker_parser)
     learned_ranker_parser.add_argument("--project-root", type=Path, default=None)
     learned_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
@@ -532,6 +615,11 @@ def build_parser() -> argparse.ArgumentParser:
     lightgbm_ranker_parser.add_argument("--num-threads", type=int, default=4)
     lightgbm_ranker_parser.add_argument("--chunk-customers", type=int, default=2000)
     lightgbm_ranker_parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print monitorable progress messages for long LightGBM validation runs.",
+    )
+    lightgbm_ranker_parser.add_argument(
         "--max-train-customers",
         type=int,
         default=None,
@@ -550,6 +638,104 @@ def build_parser() -> argparse.ArgumentParser:
     lightgbm_ranker_parser.add_argument("--eval-candidate-path", type=Path, required=True)
     lightgbm_ranker_parser.add_argument("--report-path", type=Path, default=None)
     lightgbm_ranker_parser.set_defaults(handler=_handle_evaluate_lightgbm_behavioral_ranker)
+
+    lightgbm_submission_parser = subparsers.add_parser(
+        "generate-lightgbm-behavioral-submission",
+        help=(
+            "Train the optional rich LightGBM behavioral ranker on a leakage-safe "
+            "label window and generate a final-data submission. Requires local lightgbm."
+        ),
+    )
+    lightgbm_submission_parser.add_argument(
+        "--train-cutoff",
+        required=True,
+        help="Training-label cutoff date, YYYY-MM-DD.",
+    )
+    lightgbm_submission_parser.add_argument("--horizon-days", type=int, default=7)
+    lightgbm_submission_parser.add_argument("--k", type=int, default=12)
+    lightgbm_submission_parser.add_argument("--candidate-k", type=int, default=100)
+    lightgbm_submission_parser.add_argument("--popularity-lookback-days", type=int, default=7)
+    lightgbm_submission_parser.add_argument(
+        "--no-co-visitation",
+        action="store_true",
+        help="Disable co-visitation candidate rows.",
+    )
+    lightgbm_submission_parser.add_argument(
+        "--co-visitation-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+    )
+    lightgbm_submission_parser.add_argument(
+        "--co-visitation-max-neighbors-per-item",
+        type=int,
+        default=DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    )
+    lightgbm_submission_parser.add_argument("--negative-per-positive", type=int, default=50)
+    lightgbm_submission_parser.add_argument("--blend-lambda", type=float, default=0.75)
+    lightgbm_submission_parser.add_argument("--num-boost-round", type=int, default=120)
+    lightgbm_submission_parser.add_argument("--learning-rate", type=float, default=0.03)
+    lightgbm_submission_parser.add_argument("--num-leaves", type=int, default=31)
+    lightgbm_submission_parser.add_argument("--min-data-in-leaf", type=int, default=100)
+    lightgbm_submission_parser.add_argument("--feature-fraction", type=float, default=0.9)
+    lightgbm_submission_parser.add_argument("--bagging-fraction", type=float, default=0.9)
+    lightgbm_submission_parser.add_argument("--bagging-freq", type=int, default=1)
+    lightgbm_submission_parser.add_argument("--lambda-l2", type=float, default=5.0)
+    lightgbm_submission_parser.add_argument("--seed", type=int, default=42)
+    lightgbm_submission_parser.add_argument("--num-threads", type=int, default=4)
+    lightgbm_submission_parser.add_argument("--chunk-customers", type=int, default=2000)
+    lightgbm_submission_parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="Print monitorable progress messages for long training/submission runs.",
+    )
+    lightgbm_submission_parser.add_argument(
+        "--max-train-customers",
+        type=int,
+        default=None,
+        help="Optional deterministic cap for training-label customers.",
+    )
+    lightgbm_submission_parser.add_argument(
+        "--max-target-customers",
+        type=int,
+        default=None,
+        help="Optional smoke cap for final target customers; skips full submission validation.",
+    )
+    lightgbm_submission_parser.add_argument(
+        "--transaction-progress-interval",
+        type=int,
+        default=None,
+        help="Optional raw transaction scan progress interval for source builders.",
+    )
+    lightgbm_submission_parser.add_argument(
+        "--prediction-progress-interval",
+        type=int,
+        default=10000,
+        help="Customer interval for final scoring progress messages.",
+    )
+    _add_two_tower_ranker_weight_arguments(lightgbm_submission_parser)
+    _add_two_tower_candidate_arguments(lightgbm_submission_parser)
+    _add_seasonal_popularity_arguments(lightgbm_submission_parser)
+    _add_age_segment_popularity_arguments(lightgbm_submission_parser)
+    _add_garment_group_popularity_arguments(lightgbm_submission_parser)
+    _add_product_code_popularity_arguments(lightgbm_submission_parser)
+    lightgbm_submission_parser.add_argument("--project-root", type=Path, default=None)
+    lightgbm_submission_parser.add_argument("--raw-data-dir", type=Path, default=None)
+    lightgbm_submission_parser.add_argument("--train-candidate-path", type=Path, required=True)
+    lightgbm_submission_parser.add_argument(
+        "--extra-train-window",
+        nargs=2,
+        action="append",
+        default=None,
+        metavar=("CUTOFF", "CANDIDATE_CSV"),
+        help=(
+            "Additional leakage-safe training window as CUTOFF CANDIDATE_CSV. "
+            "May be repeated for multi-week LightGBM training."
+        ),
+    )
+    lightgbm_submission_parser.add_argument("--output-path", type=Path, default=None)
+    lightgbm_submission_parser.add_argument("--validation-report-path", type=Path, default=None)
+    lightgbm_submission_parser.add_argument("--report-path", type=Path, default=None)
+    lightgbm_submission_parser.set_defaults(handler=_handle_generate_lightgbm_behavioral_submission)
 
     rolling_ranker_parser = subparsers.add_parser(
         "rolling-ranker-validation",
@@ -599,8 +785,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap applied separately to all rolling windows.",
     )
+    _add_seasonal_popularity_arguments(rolling_ranker_parser)
     _add_age_segment_popularity_arguments(rolling_ranker_parser)
     _add_garment_group_popularity_arguments(rolling_ranker_parser)
+    _add_product_code_popularity_arguments(rolling_ranker_parser)
     _add_content_similarity_candidate_arguments(rolling_ranker_parser)
     rolling_ranker_parser.add_argument("--project-root", type=Path, default=None)
     rolling_ranker_parser.add_argument("--raw-data-dir", type=Path, default=None)
@@ -695,8 +883,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional deterministic cap for the latest-window weight-selection customers only.",
     )
+    _add_seasonal_popularity_arguments(deterministic_submission_parser)
     _add_age_segment_popularity_arguments(deterministic_submission_parser)
     _add_garment_group_popularity_arguments(deterministic_submission_parser)
+    _add_product_code_popularity_arguments(deterministic_submission_parser)
     _add_two_tower_candidate_arguments(deterministic_submission_parser)
     _add_two_tower_ranker_weight_arguments(deterministic_submission_parser)
     deterministic_submission_parser.add_argument("--project-root", type=Path, default=None)
@@ -1109,6 +1299,38 @@ def _add_two_tower_ranker_weight_arguments(parser: argparse.ArgumentParser) -> N
     )
 
 
+def _add_seasonal_popularity_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional shifted-window seasonal popularity source arguments."""
+
+    parser.add_argument(
+        "--include-seasonal-popularity",
+        action="store_true",
+        help=(
+            "Include global article popularity from a historical shifted window, "
+            "for example same-week-last-year popularity."
+        ),
+    )
+    parser.add_argument(
+        "--seasonal-shift-days",
+        type=int,
+        default=DEFAULT_SEASONAL_SHIFT_DAYS,
+        help=(
+            "Days between the cutoff and historical seasonal window start. "
+            f"Defaults to {DEFAULT_SEASONAL_SHIFT_DAYS} for 2020 leap-year "
+            "same-date-last-year H&M cutoffs."
+        ),
+    )
+    parser.add_argument(
+        "--seasonal-window-days",
+        type=int,
+        default=DEFAULT_SEASONAL_WINDOW_DAYS,
+        help=(
+            "Length of the shifted historical popularity window. "
+            f"Defaults to {DEFAULT_SEASONAL_WINDOW_DAYS} days."
+        ),
+    )
+
+
 def _add_age_segment_popularity_arguments(parser: argparse.ArgumentParser) -> None:
     """Add optional age-segment popularity candidate-source arguments."""
 
@@ -1165,6 +1387,37 @@ def _add_garment_group_popularity_arguments(parser: argparse.ArgumentParser) -> 
     )
 
 
+def _add_product_code_popularity_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add optional product-code affinity popularity candidate-source arguments."""
+
+    parser.add_argument(
+        "--include-product-code-popularity",
+        action="store_true",
+        help=(
+            "Include recent article popularity from product codes seen in each "
+            "customer's pre-cutoff history (same-product color/size variants)."
+        ),
+    )
+    parser.add_argument(
+        "--product-code-popularity-lookback-days",
+        type=int,
+        default=None,
+        help=(
+            "Optional pre-cutoff lookback for product-code popularity. "
+            "Defaults to global lookback."
+        ),
+    )
+    parser.add_argument(
+        "--product-code-max-history-items",
+        type=int,
+        default=DEFAULT_MAX_HISTORY_ITEMS,
+        help=(
+            "Recent unique customer-history articles used for product-code affinities. "
+            f"Defaults to {DEFAULT_MAX_HISTORY_ITEMS}."
+        ),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the command-line interface.
 
@@ -1178,6 +1431,59 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.handler(args))
+
+
+def _handle_eda_report(args: argparse.Namespace) -> int:
+    """Handle the ``eda-report`` subcommand.
+
+    Args:
+        args: Parsed command arguments.
+
+    Returns:
+        ``0`` after writing the EDA report to disk.
+    """
+
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    rolling_cutoffs = tuple(args.rolling_cutoffs)
+    config = EdaReportConfig(
+        rolling_cutoffs=rolling_cutoffs,
+        top_hierarchy_values=int(args.top_hierarchy_values),
+        top_busy_days=int(args.top_busy_days),
+        segment_thresholds=EdaSegmentThresholds(
+            cold_max_transactions=int(args.cold_max_transactions),
+            sparse_max_transactions=int(args.sparse_max_transactions),
+        ),
+    )
+    report_path = args.report_path or paths.eda_report_path
+    markdown_path = args.markdown_path or paths.eda_report_markdown_path
+    if not report_path.is_absolute():
+        report_path = paths.root / report_path
+    if not markdown_path.is_absolute():
+        markdown_path = paths.root / markdown_path
+
+    report = build_eda_report(paths.raw_data_dir, config=config)
+    written_json = write_eda_report(report, report_path)
+    written_markdown = write_eda_report_markdown(report, markdown_path)
+
+    print(f"Raw data directory: {paths.raw_data_dir}")
+    print(f"Transactions analyzed: {report.transactions.total_rows:,}")
+    print("Date range: " f"{report.transactions.date_min} to {report.transactions.date_max}")
+    print(f"Distinct customers (transactions): {report.transactions.distinct_customers:,}")
+    print(f"Distinct articles (transactions): {report.transactions.distinct_articles:,}")
+    print(
+        "Submission segmentation: cold="
+        f"{report.customers.submission_segment_counts.get('cold', 0):,}"
+        ", sparse="
+        f"{report.customers.submission_segment_counts.get('sparse', 0):,}"
+        ", dense="
+        f"{report.customers.submission_segment_counts.get('dense', 0):,}"
+    )
+    for cutoff, share in report.customers.cold_user_share_by_cutoff.items():
+        cold_count = report.customers.cold_customer_counts_by_cutoff.get(cutoff, 0)
+        print(f"Cold-user share @ {cutoff}: {share:.4f} ({cold_count:,} customers)")
+    print(f"JSON report written to: {written_json}")
+    print(f"Markdown report written to: {written_markdown}")
+    return 0
 
 
 def _handle_validate_data_contract(args: argparse.Namespace) -> int:
@@ -1443,6 +1749,7 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
     content_source_name = _effective_content_similarity_source_name(args)
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    article_product_codes = _load_article_product_codes_if_enabled(paths, args)
     output_path = args.output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
         k=args.k,
@@ -1452,6 +1759,13 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
         ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -1468,6 +1782,15 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1510,6 +1833,9 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=args.seasonal_shift_days,
+        seasonal_window_days=args.seasonal_window_days,
         include_age_segment_popularity=args.include_age_segment_popularity,
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -1518,6 +1844,10 @@ def _handle_export_candidates(args: argparse.Namespace) -> int:
         article_garment_group_by_id=article_garment_groups,
         garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
         garment_group_max_history_items=args.garment_group_max_history_items,
+        include_product_code_popularity=args.include_product_code_popularity,
+        article_product_code_by_id=article_product_codes,
+        product_code_popularity_lookback_days=_product_code_popularity_lookback_days(args),
+        product_code_max_history_items=args.product_code_max_history_items,
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1562,6 +1892,7 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
     content_source_name = _effective_content_similarity_source_name(args)
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    article_product_codes = _load_article_product_codes_if_enabled(paths, args)
     ranker_weights = _deterministic_ranker_weights_from_args(args)
     candidate_output_path = args.candidate_output_path or paths.candidate_export_path(
         cutoff=args.cutoff,
@@ -1572,6 +1903,13 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
+        ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
         ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -1588,6 +1926,15 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1633,6 +1980,13 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -1648,6 +2002,15 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1684,6 +2047,9 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=args.seasonal_shift_days,
+        seasonal_window_days=args.seasonal_window_days,
         include_age_segment_popularity=args.include_age_segment_popularity,
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -1692,6 +2058,10 @@ def _handle_evaluate_ranker_baseline(args: argparse.Namespace) -> int:
         article_garment_group_by_id=article_garment_groups,
         garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
         garment_group_max_history_items=args.garment_group_max_history_items,
+        include_product_code_popularity=args.include_product_code_popularity,
+        article_product_code_by_id=article_product_codes,
+        product_code_popularity_lookback_days=_product_code_popularity_lookback_days(args),
+        product_code_max_history_items=args.product_code_max_history_items,
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -1793,6 +2163,13 @@ def _handle_tune_deterministic_ranker(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -1808,6 +2185,15 @@ def _handle_tune_deterministic_ranker(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1915,6 +2301,7 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
     content_source_name = _effective_content_similarity_source_name(args)
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    article_product_codes = _load_article_product_codes_if_enabled(paths, args)
     train_split = (
         TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
         if args.train_cutoff is not None
@@ -1933,6 +2320,13 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -1948,6 +2342,15 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -1980,6 +2383,13 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -1995,6 +2405,15 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -2044,6 +2463,13 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -2059,6 +2485,15 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -2106,6 +2541,9 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=args.seasonal_shift_days,
+        seasonal_window_days=args.seasonal_window_days,
         include_age_segment_popularity=args.include_age_segment_popularity,
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -2114,6 +2552,10 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         article_garment_group_by_id=article_garment_groups,
         garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
         garment_group_max_history_items=args.garment_group_max_history_items,
+        include_product_code_popularity=args.include_product_code_popularity,
+        article_product_code_by_id=article_product_codes,
+        product_code_popularity_lookback_days=_product_code_popularity_lookback_days(args),
+        product_code_max_history_items=args.product_code_max_history_items,
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -2137,6 +2579,9 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=args.seasonal_shift_days,
+        seasonal_window_days=args.seasonal_window_days,
         include_age_segment_popularity=args.include_age_segment_popularity,
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -2145,6 +2590,10 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
         article_garment_group_by_id=article_garment_groups,
         garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
         garment_group_max_history_items=args.garment_group_max_history_items,
+        include_product_code_popularity=args.include_product_code_popularity,
+        article_product_code_by_id=article_product_codes,
+        product_code_popularity_lookback_days=_product_code_popularity_lookback_days(args),
+        product_code_max_history_items=args.product_code_max_history_items,
         content_similarity_manifest_path=content_manifest_path,
         content_similarity_source_name=content_source_name,
         content_similarity_max_history_items=args.content_similarity_max_history_items,
@@ -2220,6 +2669,9 @@ def _handle_evaluate_learned_ranker_baseline(args: argparse.Namespace) -> int:
 def _handle_evaluate_lightgbm_behavioral_ranker(args: argparse.Namespace) -> int:
     """Handle the ``evaluate-lightgbm-behavioral-ranker`` subcommand."""
 
+    progress = (
+        (lambda message: print(f"[lightgbm] {message}", flush=True)) if args.progress else None
+    )
     paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
     evaluation_split = TemporalSplit.from_isoformat(args.cutoff, horizon_days=args.horizon_days)
     train_split = (
@@ -2232,22 +2684,39 @@ def _handle_evaluate_lightgbm_behavioral_ranker(args: argparse.Namespace) -> int
 
     train_candidate_path = _resolve_path_under_root(paths, args.train_candidate_path)
     eval_candidate_path = _resolve_path_under_root(paths, args.eval_candidate_path)
+    if progress is not None:
+        progress("validating candidate export metadata")
+    _validate_candidate_export_metadata(train_candidate_path, train_split, "training")
+    _validate_candidate_export_metadata(eval_candidate_path, evaluation_split, "evaluation")
     report_path = args.report_path or _lightgbm_behavioral_ranker_report_path(paths, args)
     report_path = _resolve_path_under_root(paths, report_path)
 
+    if progress is not None:
+        progress("loading sample submission customer universe")
     submission_customer_ids = load_submission_customer_ids(paths.raw_data_dir)
+    if progress is not None:
+        progress("loading training validation labels")
     train_labels = _validation_labels_for_split(
         raw_data_dir=paths.raw_data_dir,
         split=train_split,
         submission_customer_ids=submission_customer_ids,
         max_target_customers=args.max_train_customers,
     )
+    if progress is not None:
+        progress(f"loaded training labels for {len(train_labels)} customers")
+        progress("loading evaluation validation labels")
     eval_labels = _validation_labels_for_split(
         raw_data_dir=paths.raw_data_dir,
         split=evaluation_split,
         submission_customer_ids=submission_customer_ids,
         max_target_customers=args.max_eval_customers,
     )
+    if progress is not None:
+        progress(f"loaded evaluation labels for {len(eval_labels)} customers")
+        progress("loading article metadata attributes")
+    article_attributes_by_id = load_article_attribute_maps(paths.raw_data_dir)
+    if progress is not None:
+        progress(f"loaded article metadata for {len(article_attributes_by_id)} articles")
     config = LightGBMBehavioralRankerConfig(
         k=args.k,
         negative_per_positive=args.negative_per_positive,
@@ -2266,14 +2735,16 @@ def _handle_evaluate_lightgbm_behavioral_ranker(args: argparse.Namespace) -> int
         deterministic_weights=_lightgbm_behavioral_ranker_weights_from_args(args),
     )
     report = evaluate_lightgbm_behavioral_ranker_from_csv(
-        transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
+        transaction_iter_factory=lambda: iter_transactions(paths.raw_data_dir),
         train_split=train_split,
         evaluation_split=evaluation_split,
         train_candidate_path=train_candidate_path,
         evaluation_candidate_path=eval_candidate_path,
         train_validation_labels=train_labels,
         evaluation_validation_labels=eval_labels,
+        article_attributes_by_id=article_attributes_by_id,
         config=config,
+        progress_callback=progress,
     )
     written_report_path = write_lightgbm_behavioral_ranker_report(report, report_path)
 
@@ -2297,6 +2768,309 @@ def _handle_evaluate_lightgbm_behavioral_ranker(args: argparse.Namespace) -> int
     print(f"Eval candidate CSV: {eval_candidate_path}")
     print(f"LightGBM behavioral ranker report written to: {written_report_path}")
     return 0
+
+
+def _handle_generate_lightgbm_behavioral_submission(args: argparse.Namespace) -> int:
+    """Handle the rich LightGBM behavioral-ranker submission command."""
+
+    progress = (
+        (lambda message: print(f"[lightgbm-submission] {message}", flush=True))
+        if args.progress
+        else None
+    )
+    paths = ProjectPaths.from_root(root=args.project_root, raw_data_dir=args.raw_data_dir)
+    train_split = TemporalSplit.from_isoformat(args.train_cutoff, horizon_days=args.horizon_days)
+    train_candidate_path = _resolve_path_under_root(paths, args.train_candidate_path)
+    training_window_specs = [(train_split, train_candidate_path)]
+    for extra_cutoff, extra_candidate_path in args.extra_train_window or ():
+        extra_split = TemporalSplit.from_isoformat(extra_cutoff, horizon_days=args.horizon_days)
+        training_window_specs.append(
+            (extra_split, _resolve_path_under_root(paths, Path(extra_candidate_path)))
+        )
+    if progress is not None:
+        progress("validating training candidate export metadata")
+    for window_index, (window_split, window_candidate_path) in enumerate(
+        training_window_specs,
+        start=1,
+    ):
+        _validate_candidate_export_metadata(
+            window_candidate_path,
+            window_split,
+            f"training window {window_index}",
+        )
+
+    slug = _lightgbm_behavioral_submission_slug(args)
+    output_path = _resolve_path_under_root(
+        paths,
+        args.output_path or (paths.submissions_dir / f"{slug}.csv"),
+    )
+    validation_report_path = _resolve_path_under_root(
+        paths,
+        args.validation_report_path or paths.submission_validation_report_path(output_path),
+    )
+    report_path = _resolve_path_under_root(
+        paths,
+        args.report_path or (paths.artifacts_dir / "ranker-submissions" / f"{slug}.json"),
+    )
+
+    if progress is not None:
+        progress("loading sample submission customer universe")
+    target_customer_ids = load_submission_customer_ids_in_order(paths.raw_data_dir)
+    if args.max_target_customers is not None:
+        if args.max_target_customers <= 0:
+            raise ValueError("max-target-customers must be positive when provided")
+        target_customer_ids = target_customer_ids[: args.max_target_customers]
+    submission_customer_id_set = load_submission_customer_ids(paths.raw_data_dir)
+
+    training_windows: list[LightGBMBehavioralTrainingWindow] = []
+    for window_index, (window_split, window_candidate_path) in enumerate(
+        training_window_specs,
+        start=1,
+    ):
+        if progress is not None:
+            progress(
+                f"loading training validation labels for window {window_index}: "
+                f"{window_split.cutoff}"
+            )
+        window_labels = _validation_labels_for_split(
+            raw_data_dir=paths.raw_data_dir,
+            split=window_split,
+            submission_customer_ids=submission_customer_id_set,
+            max_target_customers=args.max_train_customers,
+        )
+        if progress is not None:
+            progress(
+                f"loaded training labels for window {window_index}: "
+                f"{len(window_labels)} customers"
+            )
+        training_windows.append(
+            LightGBMBehavioralTrainingWindow(
+                split=window_split,
+                candidate_path=window_candidate_path,
+                validation_labels=window_labels,
+            )
+        )
+    if progress is not None:
+        progress("loading article metadata attributes")
+    article_attributes_by_id = load_article_attribute_maps(paths.raw_data_dir)
+    if progress is not None:
+        progress(f"loaded article metadata for {len(article_attributes_by_id)} articles")
+
+    config = LightGBMBehavioralRankerConfig(
+        k=args.k,
+        negative_per_positive=args.negative_per_positive,
+        blend_lambda=args.blend_lambda,
+        num_boost_round=args.num_boost_round,
+        learning_rate=args.learning_rate,
+        num_leaves=args.num_leaves,
+        min_data_in_leaf=args.min_data_in_leaf,
+        feature_fraction=args.feature_fraction,
+        bagging_fraction=args.bagging_fraction,
+        bagging_freq=args.bagging_freq,
+        lambda_l2=args.lambda_l2,
+        seed=args.seed,
+        num_threads=args.num_threads,
+        chunk_customers=args.chunk_customers,
+        deterministic_weights=_lightgbm_behavioral_ranker_weights_from_args(args),
+    )
+    np, model, training_summary = train_lightgbm_behavioral_ranker_from_windows(
+        transaction_iter_factory=lambda: iter_transactions(paths.raw_data_dir),
+        training_windows=tuple(training_windows),
+        article_attributes_by_id=article_attributes_by_id,
+        config=config,
+        progress_callback=progress,
+    )
+
+    if progress is not None:
+        progress("finding final training cutoff")
+    max_transaction_date = find_max_transaction_date(
+        iter_transaction_events(paths.raw_data_dir),
+        progress_interval=args.transaction_progress_interval,
+        progress_callback=(
+            None
+            if progress is None
+            else lambda rows: progress(f"scanned transactions for max date: {rows}")
+        ),
+    )
+    final_split = TemporalSplit(
+        cutoff=max_transaction_date + timedelta(days=1),
+        horizon_days=args.horizon_days,
+    )
+    final_two_tower_model = _train_two_tower_candidate_model_if_enabled(paths, final_split, args)
+    customer_segment_by_id = _load_customer_age_segments_if_enabled(paths, args)
+    article_garment_group_by_id = _load_article_garment_groups_if_enabled(paths, args)
+    article_product_code_by_id = _load_article_product_codes_if_enabled(paths, args)
+    submission = build_lightgbm_behavioral_ranker_submission_predictions(
+        transaction_iter_factory=lambda: iter_transactions(paths.raw_data_dir),
+        split=final_split,
+        target_customer_ids=target_customer_ids,
+        np=np,
+        model=model,
+        config=config,
+        article_attributes_by_id=article_attributes_by_id,
+        k=args.k,
+        candidate_k=args.candidate_k,
+        popularity_lookback_days=args.popularity_lookback_days,
+        include_co_visitation=not args.no_co_visitation,
+        co_visitation_max_history_items=args.co_visitation_max_history_items,
+        co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=args.seasonal_shift_days,
+        seasonal_window_days=args.seasonal_window_days,
+        include_age_segment_popularity=args.include_age_segment_popularity,
+        customer_segment_by_id=customer_segment_by_id,
+        age_segment_bucket_size=args.age_segment_bucket_size,
+        age_segment_popularity_lookback_days=(
+            _age_segment_popularity_lookback_days(args)
+            if args.include_age_segment_popularity
+            else None
+        ),
+        include_garment_group_popularity=args.include_garment_group_popularity,
+        article_garment_group_by_id=article_garment_group_by_id,
+        garment_group_popularity_lookback_days=(
+            _garment_group_popularity_lookback_days(args)
+            if args.include_garment_group_popularity
+            else None
+        ),
+        garment_group_max_history_items=args.garment_group_max_history_items,
+        include_product_code_popularity=args.include_product_code_popularity,
+        article_product_code_by_id=article_product_code_by_id,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=args.product_code_max_history_items,
+        two_tower_model=final_two_tower_model,
+        two_tower_source_name=TWO_TOWER_RETRIEVAL_SOURCE,
+        two_tower_max_retrieval_articles=args.two_tower_max_retrieval_articles,
+        max_transaction_date=max_transaction_date,
+        transaction_progress_interval=args.transaction_progress_interval,
+        transaction_progress_callback=(
+            None
+            if progress is None
+            else lambda phase, rows: progress(f"{phase} scanned transactions: {rows}")
+        ),
+        status_callback=progress,
+        progress_interval=args.prediction_progress_interval,
+        progress_callback=(
+            None
+            if progress is None
+            else lambda completed, total: progress(f"scored final customers: {completed}/{total}")
+        ),
+    )
+    written_submission_path = write_submission_file(
+        submission.predictions,
+        target_customer_ids,
+        output_path,
+        max_predictions=args.k,
+    )
+
+    validation_result = None
+    written_validation_report_path = None
+    if args.max_target_customers is None:
+        validation_result = validate_submission_file(
+            submission_path=written_submission_path,
+            expected_customer_ids=submission_customer_id_set,
+            valid_article_ids=load_article_ids(paths.raw_data_dir),
+            require_full_length=True,
+        )
+        written_validation_report_path = write_submission_validation_report(
+            validation_result,
+            validation_report_path,
+        )
+    report = {
+        "experiment": slug,
+        "train_cutoff": train_split.cutoff.isoformat(),
+        "train_validation_end_exclusive": train_split.validation_end.isoformat(),
+        "train_window_count": len(training_windows),
+        "extra_train_windows": tuple(
+            {
+                "cutoff": window.split.cutoff.isoformat(),
+                "validation_end_exclusive": window.split.validation_end.isoformat(),
+                "candidate_path": str(window.candidate_path),
+            }
+            for window in training_windows[1:]
+        ),
+        "final_training_cutoff": final_split.cutoff.isoformat(),
+        "max_transaction_date": max_transaction_date.isoformat(),
+        "k": args.k,
+        "candidate_k": args.candidate_k,
+        "popularity_lookback_days": args.popularity_lookback_days,
+        "include_co_visitation": not args.no_co_visitation,
+        "include_seasonal_popularity": args.include_seasonal_popularity,
+        "seasonal_shift_days": (
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        "seasonal_window_days": (
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
+        "include_age_segment_popularity": args.include_age_segment_popularity,
+        "include_garment_group_popularity": args.include_garment_group_popularity,
+        "include_two_tower_retrieval": args.include_two_tower_retrieval,
+        "two_tower_source_name": (
+            TWO_TOWER_RETRIEVAL_SOURCE if args.include_two_tower_retrieval else None
+        ),
+        "two_tower_max_retrieval_articles": (
+            args.two_tower_max_retrieval_articles if args.include_two_tower_retrieval else None
+        ),
+        "max_train_customers": args.max_train_customers,
+        "max_target_customers": args.max_target_customers,
+        "training": asdict(training_summary),
+        "submission": asdict(submission.diagnostics),
+        "submission_path": str(written_submission_path),
+        "validation_report_path": (
+            str(written_validation_report_path) if written_validation_report_path else None
+        ),
+        "validation": asdict(validation_result) if validation_result is not None else None,
+        "valid": bool(validation_result.valid) if validation_result is not None else None,
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    print(f"LightGBM behavioral submission written to: {written_submission_path}")
+    if validation_result is not None:
+        print(f"Submission valid: {validation_result.valid}")
+        print(f"Validation report written to: {written_validation_report_path}")
+    else:
+        print("Submission validation skipped because --max-target-customers was set")
+    print(f"LightGBM behavioral submission report written to: {report_path}")
+    return 0 if validation_result is None or validation_result.valid else 1
+
+
+def _validate_candidate_export_metadata(
+    candidate_path: Path,
+    split: TemporalSplit,
+    role: str,
+) -> None:
+    """Validate that a candidate CSV's sidecar metadata matches the split.
+
+    This guards the optional LightGBM evaluator from combining cutoff-safe
+    behavioral features with stale or future-leaking precomputed source ranks.
+    """
+
+    metadata_path = candidate_path.with_suffix(".json")
+    if not metadata_path.exists():
+        raise ValueError(f"{role} candidate metadata JSON is required: {metadata_path}")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    cutoff = metadata.get("cutoff")
+    if cutoff != split.cutoff.isoformat():
+        raise ValueError(
+            f"{role} candidate metadata cutoff {cutoff!r} does not match "
+            f"requested split cutoff {split.cutoff.isoformat()!r}"
+        )
+    horizon_days = metadata.get("horizon_days")
+    if horizon_days != split.horizon_days:
+        raise ValueError(
+            f"{role} candidate metadata horizon_days {horizon_days!r} does not match "
+            f"requested horizon_days {split.horizon_days!r}"
+        )
+    validation_end = metadata.get("validation_end_exclusive")
+    if validation_end != split.validation_end.isoformat():
+        raise ValueError(
+            f"{role} candidate metadata validation_end_exclusive {validation_end!r} "
+            f"does not match requested validation end {split.validation_end.isoformat()!r}"
+        )
 
 
 def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
@@ -2329,6 +3103,13 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -2344,6 +3125,15 @@ def _handle_rolling_ranker_validation(args: argparse.Namespace) -> int:
         ),
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
+        ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
         ),
         content_similarity_source_name=(
             content_source_name if args.content_similarity_manifest_path is not None else None
@@ -2771,6 +3561,15 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         garment_group_max_history_items=(
             args.garment_group_max_history_items if args.include_garment_group_popularity else None
         ),
+        include_product_code_popularity=args.include_product_code_popularity,
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if args.include_product_code_popularity
+            else None
+        ),
+        product_code_max_history_items=(
+            args.product_code_max_history_items if args.include_product_code_popularity else None
+        ),
         tuning_slug=(
             f"tune_first_{args.max_target_customers}_customers"
             if args.max_target_customers is not None
@@ -2818,6 +3617,7 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
     print(
         "Generating final-data deterministic-ranker predictions for "
         f"{len(target_customer_ids)} customers. include_co_visitation={not args.no_co_visitation}, "
+        f"include_seasonal={args.include_seasonal_popularity}, "
         f"include_age_segment={args.include_age_segment_popularity}, "
         f"include_garment_group={args.include_garment_group_popularity}, "
         f"include_two_tower={args.include_two_tower_retrieval}",
@@ -2825,6 +3625,7 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
     )
     customer_age_segments = _load_customer_age_segments_if_enabled(paths, args)
     article_garment_groups = _load_article_garment_groups_if_enabled(paths, args)
+    article_product_codes = _load_article_product_codes_if_enabled(paths, args)
     final_two_tower_model = _train_two_tower_candidate_model_if_enabled(paths, final_split, args)
     submission = build_deterministic_ranker_submission_predictions(
         transaction_iter_factory=lambda: iter_transaction_events(paths.raw_data_dir),
@@ -2837,6 +3638,9 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=args.seasonal_shift_days,
+        seasonal_window_days=args.seasonal_window_days,
         include_age_segment_popularity=args.include_age_segment_popularity,
         customer_segment_by_id=customer_age_segments,
         age_segment_bucket_size=args.age_segment_bucket_size,
@@ -2845,6 +3649,10 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         article_garment_group_by_id=article_garment_groups,
         garment_group_popularity_lookback_days=_garment_group_popularity_lookback_days(args),
         garment_group_max_history_items=args.garment_group_max_history_items,
+        include_product_code_popularity=args.include_product_code_popularity,
+        article_product_code_by_id=article_product_codes,
+        product_code_popularity_lookback_days=_product_code_popularity_lookback_days(args),
+        product_code_max_history_items=args.product_code_max_history_items,
         two_tower_model=final_two_tower_model,
         two_tower_source_name=args.two_tower_source_name,
         two_tower_max_retrieval_articles=args.two_tower_max_retrieval_articles,
@@ -2887,6 +3695,13 @@ def _handle_generate_deterministic_ranker_submission(args: argparse.Namespace) -
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=args.include_seasonal_popularity,
+        seasonal_shift_days=(
+            args.seasonal_shift_days if args.include_seasonal_popularity else None
+        ),
+        seasonal_window_days=(
+            args.seasonal_window_days if args.include_seasonal_popularity else None
+        ),
         include_age_segment_popularity=args.include_age_segment_popularity,
         age_segment_bucket_size=args.age_segment_bucket_size,
         age_segment_popularity_lookback_days=(
@@ -3520,6 +4335,61 @@ def _lightgbm_behavioral_ranker_report_path(
     return paths.artifacts_dir / "ranker-baselines" / f"{name}.json"
 
 
+def _lightgbm_behavioral_submission_slug(args: argparse.Namespace) -> str:
+    """Build a compact slug for rich LightGBM behavioral submission artifacts."""
+
+    name = (
+        f"lightgbm_behavioral_rich_train_{_cli_safe_name(args.train_cutoff)}_"
+        f"lookback_{args.popularity_lookback_days}_"
+        f"candidate_k_{args.candidate_k}_rank_k_{args.k}_"
+        f"negpp_{args.negative_per_positive}_lambda_{_float_slug(args.blend_lambda)}"
+    )
+    if not args.no_co_visitation:
+        name = (
+            f"{name}_covis_h{args.co_visitation_max_history_items}_"
+            f"n{args.co_visitation_max_neighbors_per_item}"
+        )
+    if args.include_seasonal_popularity:
+        name = (
+            f"{name}_seasonal_shift{args.seasonal_shift_days}_" f"window{args.seasonal_window_days}"
+        )
+    if args.include_age_segment_popularity:
+        name = (
+            f"{name}_age_segment_b{args.age_segment_bucket_size}_"
+            f"lookback{_age_segment_popularity_lookback_days(args)}"
+        )
+    if args.include_garment_group_popularity:
+        name = (
+            f"{name}_garment_group_lookback{_garment_group_popularity_lookback_days(args)}_"
+            f"h{args.garment_group_max_history_items}"
+        )
+    if getattr(args, "include_product_code_popularity", False):
+        name = (
+            f"{name}_product_code_lookback{_product_code_popularity_lookback_days(args)}_"
+            f"h{getattr(args, 'product_code_max_history_items', DEFAULT_MAX_HISTORY_ITEMS)}"
+        )
+    two_tower_slug = _two_tower_config_slug(args)
+    if two_tower_slug is not None:
+        name = f"{name}_two_tower_{two_tower_slug}"
+    if args.extra_train_window:
+        extra_cutoffs = "_".join(_cli_safe_name(window[0]) for window in args.extra_train_window)
+        name = f"{name}_extra_train_{extra_cutoffs}"
+    if args.max_train_customers is not None:
+        name = f"{name}_train_first_{args.max_train_customers}_customers"
+    if args.max_target_customers is not None:
+        name = f"{name}_target_first_{args.max_target_customers}_customers"
+    return _cli_safe_name(name)
+
+
+def _cli_safe_name(value: str) -> str:
+    """Return a conservative path-safe token for CLI-generated artifacts."""
+
+    safe = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_" for character in value
+    ).strip("_")
+    return safe or "artifact"
+
+
 def _deterministic_tuning_grid_from_args(
     args: argparse.Namespace,
 ) -> DeterministicRankerTuningGrid:
@@ -3706,6 +4576,17 @@ def _ranker_candidate_export_path(
         co_visitation_neighbors_per_item=(
             None if args.no_co_visitation else args.co_visitation_max_neighbors_per_item
         ),
+        include_seasonal_popularity=getattr(args, "include_seasonal_popularity", False),
+        seasonal_shift_days=(
+            getattr(args, "seasonal_shift_days", DEFAULT_SEASONAL_SHIFT_DAYS)
+            if getattr(args, "include_seasonal_popularity", False)
+            else None
+        ),
+        seasonal_window_days=(
+            getattr(args, "seasonal_window_days", DEFAULT_SEASONAL_WINDOW_DAYS)
+            if getattr(args, "include_seasonal_popularity", False)
+            else None
+        ),
         include_age_segment_popularity=getattr(args, "include_age_segment_popularity", False),
         age_segment_bucket_size=getattr(args, "age_segment_bucket_size", None),
         age_segment_popularity_lookback_days=(
@@ -3726,6 +4607,17 @@ def _ranker_candidate_export_path(
         garment_group_max_history_items=(
             getattr(args, "garment_group_max_history_items", DEFAULT_MAX_HISTORY_ITEMS)
             if getattr(args, "include_garment_group_popularity", False)
+            else None
+        ),
+        include_product_code_popularity=getattr(args, "include_product_code_popularity", False),
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if getattr(args, "include_product_code_popularity", False)
+            else None
+        ),
+        product_code_max_history_items=(
+            getattr(args, "product_code_max_history_items", DEFAULT_MAX_HISTORY_ITEMS)
+            if getattr(args, "include_product_code_popularity", False)
             else None
         ),
         content_similarity_source_name=(
@@ -3817,6 +4709,9 @@ def _write_cached_ranker_candidate_export(
         include_co_visitation=not args.no_co_visitation,
         co_visitation_max_history_items=args.co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=args.co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=getattr(args, "include_seasonal_popularity", False),
+        seasonal_shift_days=getattr(args, "seasonal_shift_days", DEFAULT_SEASONAL_SHIFT_DAYS),
+        seasonal_window_days=getattr(args, "seasonal_window_days", DEFAULT_SEASONAL_WINDOW_DAYS),
         include_age_segment_popularity=getattr(args, "include_age_segment_popularity", False),
         customer_segment_by_id=_load_customer_age_segments_if_enabled(paths, args),
         age_segment_bucket_size=getattr(
@@ -3841,6 +4736,18 @@ def _write_cached_ranker_candidate_export(
         garment_group_max_history_items=getattr(
             args,
             "garment_group_max_history_items",
+            DEFAULT_MAX_HISTORY_ITEMS,
+        ),
+        include_product_code_popularity=getattr(args, "include_product_code_popularity", False),
+        article_product_code_by_id=_load_article_product_codes_if_enabled(paths, args),
+        product_code_popularity_lookback_days=(
+            _product_code_popularity_lookback_days(args)
+            if getattr(args, "include_product_code_popularity", False)
+            else None
+        ),
+        product_code_max_history_items=getattr(
+            args,
+            "product_code_max_history_items",
             DEFAULT_MAX_HISTORY_ITEMS,
         ),
         content_similarity_manifest_path=_resolve_optional_path_under_root(
@@ -4010,6 +4917,27 @@ def _load_article_garment_groups_if_enabled(
     if not getattr(args, "include_garment_group_popularity", False):
         return None
     return load_article_attribute_values(paths.raw_data_dir)
+
+
+def _load_article_product_codes_if_enabled(
+    paths: ProjectPaths,
+    args: argparse.Namespace,
+) -> dict[str, str] | None:
+    """Load article product-code mapping when the source is enabled."""
+
+    if not getattr(args, "include_product_code_popularity", False):
+        return None
+    return load_article_attribute_values(paths.raw_data_dir, attribute_column="product_code")
+
+
+def _product_code_popularity_lookback_days(args: argparse.Namespace) -> int:
+    """Return the resolved product-code popularity lookback for CLI args."""
+
+    return int(
+        args.product_code_popularity_lookback_days
+        if args.product_code_popularity_lookback_days is not None
+        else args.popularity_lookback_days
+    )
 
 
 def _learned_ranker_config_slug(args: argparse.Namespace) -> str:
