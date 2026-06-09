@@ -65,6 +65,8 @@ def test_linear_ranker_submission_predictions_backfill_and_preserve_scope() -> N
     assert submission.diagnostics.source_row_counts == {
         ALL_TIME_POPULARITY_SOURCE: 6,
         RECENT_POPULARITY_SOURCE: 6,
+        "recent_popularity_1d": 3,
+        "recent_popularity_3d": 6,
         REPEAT_SOURCE: 2,
     }
 
