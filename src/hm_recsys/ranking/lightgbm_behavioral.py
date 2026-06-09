@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from hm_recsys.data.io import TransactionEvent
 from hm_recsys.evaluation.metrics import average_precision_at_k, recall_at_k
 from hm_recsys.evaluation.temporal import TemporalSplit
 from hm_recsys.ranking.behavioral import (
     BEHAVIORAL_FEATURE_NAMES,
+    ArticleAttributeMap,
+    BehavioralTransaction,
     CutoffBehavioralFeatures,
     build_cutoff_behavioral_features,
 )
@@ -22,7 +23,6 @@ from hm_recsys.ranking.deterministic import (
     DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
     CandidateFeatures,
     DeterministicRankerWeights,
-    aggregate_candidate_features,
     iter_candidate_records_from_csv,
     score_candidate,
 )
@@ -142,6 +142,48 @@ class LightGBMBehavioralRankerReport:
     valid_report: bool = True
 
 
+@dataclass(frozen=True)
+class LightGBMBehavioralTrainingSummary:
+    """Training summary for a cutoff-safe LightGBM behavioral ranker."""
+
+    train_cutoff: str
+    train_validation_end_exclusive: str
+    horizon_days: int
+    train_candidate_path: str
+    train_label_customers: int
+    train_grouped_candidate_customers: int
+    train_unique_candidate_pairs: int
+    train_positive_pairs: int
+    train_negative_pairs_sampled: int
+    train_matrix_rows: int
+    feature_names: tuple[str, ...]
+    config: LightGBMBehavioralRankerConfig
+
+
+@dataclass(frozen=True)
+class LightGBMBehavioralTrainingWindow:
+    """One leakage-safe training window for multi-window LightGBM training."""
+
+    split: TemporalSplit
+    candidate_path: Path | str
+    validation_labels: Mapping[str, Iterable[str]]
+
+
+@dataclass(frozen=True)
+class LightGBMBehavioralTrainingWindowSummary:
+    """Per-window training-matrix summary."""
+
+    train_cutoff: str
+    train_validation_end_exclusive: str
+    train_candidate_path: str
+    train_label_customers: int
+    train_grouped_candidate_customers: int
+    train_unique_candidate_pairs: int
+    train_positive_pairs: int
+    train_negative_pairs_sampled: int
+    train_matrix_rows: int
+
+
 def lightgbm_behavioral_feature_vector(
     candidate_features: CandidateFeatures,
     behavioral_features: CutoffBehavioralFeatures,
@@ -159,50 +201,127 @@ def lightgbm_behavioral_feature_vector(
     )
 
 
-def evaluate_lightgbm_behavioral_ranker_from_csv(
-    transaction_iter_factory: Callable[[], Iterable[TransactionEvent]],
+def train_lightgbm_behavioral_ranker_from_csv(
+    transaction_iter_factory: Callable[[], Iterable[BehavioralTransaction]],
     train_split: TemporalSplit,
-    evaluation_split: TemporalSplit,
     train_candidate_path: Path | str,
-    evaluation_candidate_path: Path | str,
     train_validation_labels: Mapping[str, Iterable[str]],
-    evaluation_validation_labels: Mapping[str, Iterable[str]],
+    article_attributes_by_id: ArticleAttributeMap | None = None,
     config: LightGBMBehavioralRankerConfig = DEFAULT_LIGHTGBM_BEHAVIORAL_RANKER_CONFIG,
-) -> LightGBMBehavioralRankerReport:
-    """Train and evaluate an optional LightGBM behavioral ranker.
+    progress_callback: Callable[[str], None] | None = None,
+) -> tuple[Any, Any, LightGBMBehavioralTrainingSummary]:
+    """Train the optional LightGBM behavioral ranker and return runtime objects.
 
-    LightGBM and NumPy are imported lazily so the base package stays dependency
-    light. All behavioral features are computed with transactions strictly
-    before each split cutoff.
+    LightGBM/NumPy are returned with the model so callers can score final-data
+    candidates without importing optional dependencies at module import time.
     """
 
-    np, lgb = _import_lightgbm_runtime()
-    train_labels = _labels_as_sets(train_validation_labels)
-    evaluation_labels = _labels_as_sets(evaluation_validation_labels)
-    resolved_train_candidate_path = Path(train_candidate_path).expanduser().resolve()
-    resolved_evaluation_candidate_path = Path(evaluation_candidate_path).expanduser().resolve()
-
-    train_features_by_customer = aggregate_candidate_features(
-        iter_candidate_records_from_csv(resolved_train_candidate_path),
-        train_labels,
-    )
-    train_behavioral_features = build_cutoff_behavioral_features(
-        transaction_iter_factory(),
-        train_split.cutoff,
-        target_customer_ids=train_labels,
-    )
-    x_train, y_train, train_groups, train_pair_count, train_positive_count = _build_train_matrix(
-        np=np,
-        features_by_customer=train_features_by_customer,
-        validation_labels=train_labels,
-        behavioral_features=train_behavioral_features,
+    return train_lightgbm_behavioral_ranker_from_windows(
+        transaction_iter_factory=transaction_iter_factory,
+        training_windows=(
+            LightGBMBehavioralTrainingWindow(
+                split=train_split,
+                candidate_path=train_candidate_path,
+                validation_labels=train_validation_labels,
+            ),
+        ),
+        article_attributes_by_id=article_attributes_by_id,
         config=config,
+        progress_callback=progress_callback,
     )
-    if not train_groups:
-        raise ValueError("training candidate file produced no grouped training examples")
+
+
+def train_lightgbm_behavioral_ranker_from_windows(
+    transaction_iter_factory: Callable[[], Iterable[BehavioralTransaction]],
+    training_windows: Sequence[LightGBMBehavioralTrainingWindow],
+    article_attributes_by_id: ArticleAttributeMap | None = None,
+    config: LightGBMBehavioralRankerConfig = DEFAULT_LIGHTGBM_BEHAVIORAL_RANKER_CONFIG,
+    progress_callback: Callable[[str], None] | None = None,
+) -> tuple[Any, Any, LightGBMBehavioralTrainingSummary]:
+    """Train the optional LightGBM behavioral ranker on one or more windows."""
+
+    if not training_windows:
+        raise ValueError("at least one training window is required")
+
+    np, lgb = _import_lightgbm_runtime()
+    x_arrays: list[Any] = []
+    y_arrays: list[Any] = []
+    train_groups: list[int] = []
+    window_summaries: list[LightGBMBehavioralTrainingWindowSummary] = []
+
+    for window_index, window in enumerate(training_windows, start=1):
+        train_labels = _labels_as_sets(window.validation_labels)
+        resolved_candidate_path = Path(window.candidate_path).expanduser().resolve()
+        prefix = f"training window {window_index}/{len(training_windows)} {window.split.cutoff}"
+
+        _notify(progress_callback, f"{prefix}: loading grouped training candidates")
+        train_features_by_customer = dict(
+            iter_grouped_candidate_features_from_csv(
+                resolved_candidate_path,
+                train_labels,
+            )
+        )
+        _notify(
+            progress_callback,
+            f"{prefix}: loaded grouped training candidates for "
+            f"{len(train_features_by_customer)} customers",
+        )
+        _notify(progress_callback, f"{prefix}: building cutoff-safe behavioral features")
+        train_behavioral_features = build_cutoff_behavioral_features(
+            transaction_iter_factory(),
+            window.split.cutoff,
+            target_customer_ids=train_labels,
+            article_attributes_by_id=article_attributes_by_id,
+        )
+        _notify(progress_callback, f"{prefix}: building LightGBM training matrix")
+        matrix_progress_callback: Callable[[str], None] | None = None
+        if progress_callback is not None:
+
+            def matrix_progress_callback(message: str, prefix: str = prefix) -> None:
+                progress_callback(f"{prefix}: {message}")
+
+        x_train, y_train, groups, pair_count, positive_count = _build_train_matrix(
+            np=np,
+            features_by_customer=train_features_by_customer,
+            validation_labels=train_labels,
+            behavioral_features=train_behavioral_features,
+            config=config,
+            progress_callback=matrix_progress_callback,
+        )
+        if not groups:
+            raise ValueError(
+                f"training candidate file produced no grouped examples: "
+                f"{resolved_candidate_path}"
+            )
+        x_arrays.append(x_train)
+        y_arrays.append(y_train)
+        train_groups.extend(groups)
+        window_summaries.append(
+            LightGBMBehavioralTrainingWindowSummary(
+                train_cutoff=window.split.cutoff.isoformat(),
+                train_validation_end_exclusive=window.split.validation_end.isoformat(),
+                train_candidate_path=str(resolved_candidate_path),
+                train_label_customers=len(train_labels),
+                train_grouped_candidate_customers=len(train_features_by_customer),
+                train_unique_candidate_pairs=pair_count,
+                train_positive_pairs=positive_count,
+                train_negative_pairs_sampled=len(y_train) - positive_count,
+                train_matrix_rows=len(y_train),
+            )
+        )
+
+    x_train_all = x_arrays[0] if len(x_arrays) == 1 else np.concatenate(x_arrays, axis=0)
+    y_train_all = y_arrays[0] if len(y_arrays) == 1 else np.concatenate(y_arrays, axis=0)
+    total_positive_count = sum(summary.train_positive_pairs for summary in window_summaries)
+    _notify(
+        progress_callback,
+        f"training LightGBM on {len(y_train_all)} sampled rows, "
+        f"{total_positive_count} positives, {len(train_groups)} groups, "
+        f"{len(window_summaries)} windows",
+    )
     train_dataset = lgb.Dataset(
-        x_train,
-        label=y_train,
+        x_train_all,
+        label=y_train_all,
         group=train_groups,
         feature_name=list(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES),
     )
@@ -211,12 +330,73 @@ def evaluate_lightgbm_behavioral_ranker_from_csv(
         train_dataset,
         num_boost_round=config.num_boost_round,
     )
+    train_cutoffs = tuple(summary.train_cutoff for summary in window_summaries)
+    train_validation_ends = tuple(
+        summary.train_validation_end_exclusive for summary in window_summaries
+    )
+    train_candidate_paths = tuple(summary.train_candidate_path for summary in window_summaries)
+    summary = LightGBMBehavioralTrainingSummary(
+        train_cutoff=",".join(train_cutoffs),
+        train_validation_end_exclusive=",".join(train_validation_ends),
+        horizon_days=training_windows[0].split.horizon_days,
+        train_candidate_path=";".join(train_candidate_paths),
+        train_label_customers=sum(summary.train_label_customers for summary in window_summaries),
+        train_grouped_candidate_customers=sum(
+            summary.train_grouped_candidate_customers for summary in window_summaries
+        ),
+        train_unique_candidate_pairs=sum(
+            summary.train_unique_candidate_pairs for summary in window_summaries
+        ),
+        train_positive_pairs=total_positive_count,
+        train_negative_pairs_sampled=sum(
+            summary.train_negative_pairs_sampled for summary in window_summaries
+        ),
+        train_matrix_rows=len(y_train_all),
+        feature_names=LIGHTGBM_BEHAVIORAL_FEATURE_NAMES,
+        config=config,
+    )
+    return np, model, summary
 
+
+def evaluate_lightgbm_behavioral_ranker_from_csv(
+    transaction_iter_factory: Callable[[], Iterable[BehavioralTransaction]],
+    train_split: TemporalSplit,
+    evaluation_split: TemporalSplit,
+    train_candidate_path: Path | str,
+    evaluation_candidate_path: Path | str,
+    train_validation_labels: Mapping[str, Iterable[str]],
+    evaluation_validation_labels: Mapping[str, Iterable[str]],
+    article_attributes_by_id: ArticleAttributeMap | None = None,
+    config: LightGBMBehavioralRankerConfig = DEFAULT_LIGHTGBM_BEHAVIORAL_RANKER_CONFIG,
+    progress_callback: Callable[[str], None] | None = None,
+) -> LightGBMBehavioralRankerReport:
+    """Train and evaluate an optional LightGBM behavioral ranker.
+
+    LightGBM and NumPy are imported lazily so the base package stays dependency
+    light. All behavioral features are computed with transactions strictly
+    before each split cutoff.
+    """
+
+    evaluation_labels = _labels_as_sets(evaluation_validation_labels)
+    resolved_evaluation_candidate_path = Path(evaluation_candidate_path).expanduser().resolve()
+    np, model, training_summary = train_lightgbm_behavioral_ranker_from_csv(
+        transaction_iter_factory=transaction_iter_factory,
+        train_split=train_split,
+        train_candidate_path=train_candidate_path,
+        train_validation_labels=train_validation_labels,
+        article_attributes_by_id=article_attributes_by_id,
+        config=config,
+        progress_callback=progress_callback,
+    )
+
+    _notify(progress_callback, "building cutoff-safe evaluation behavioral features")
     evaluation_behavioral_features = build_cutoff_behavioral_features(
         transaction_iter_factory(),
         evaluation_split.cutoff,
         target_customer_ids=evaluation_labels,
+        article_attributes_by_id=article_attributes_by_id,
     )
+    _notify(progress_callback, "scoring evaluation candidates")
     metrics = _evaluate_streaming(
         np=np,
         model=model,
@@ -224,6 +404,7 @@ def evaluate_lightgbm_behavioral_ranker_from_csv(
         validation_labels=evaluation_labels,
         behavioral_features=evaluation_behavioral_features,
         config=config,
+        progress_callback=progress_callback,
     )
 
     return LightGBMBehavioralRankerReport(
@@ -233,15 +414,15 @@ def evaluate_lightgbm_behavioral_ranker_from_csv(
         evaluation_cutoff=evaluation_split.cutoff.isoformat(),
         evaluation_end_exclusive=evaluation_split.validation_end.isoformat(),
         horizon_days=evaluation_split.horizon_days,
-        train_candidate_path=str(resolved_train_candidate_path),
+        train_candidate_path=training_summary.train_candidate_path,
         evaluation_candidate_path=str(resolved_evaluation_candidate_path),
-        train_label_customers=len(train_labels),
+        train_label_customers=training_summary.train_label_customers,
         evaluation_label_customers=len(evaluation_labels),
         evaluated_customers=metrics.evaluated_customers,
         missing_evaluation_label_customers=len(evaluation_labels) - metrics.evaluated_customers,
-        train_unique_candidate_pairs=train_pair_count,
-        train_positive_pairs=train_positive_count,
-        train_negative_pairs_sampled=len(y_train) - train_positive_count,
+        train_unique_candidate_pairs=training_summary.train_unique_candidate_pairs,
+        train_positive_pairs=training_summary.train_positive_pairs,
+        train_negative_pairs_sampled=training_summary.train_negative_pairs_sampled,
         evaluation_unique_candidate_pairs=metrics.unique_candidate_pairs,
         deterministic_map_at_k=metrics.deterministic_map_at_k,
         deterministic_recall_at_k=metrics.deterministic_recall_at_k,
@@ -308,6 +489,85 @@ def iter_grouped_candidate_features_from_csv(
         yield current_customer_id, current_features
 
 
+def rank_lightgbm_behavioral_candidate_features(
+    *,
+    np: Any,
+    model: Any,
+    candidate_features: Mapping[str, CandidateFeatures],
+    behavioral_features: CutoffBehavioralFeatures,
+    config: LightGBMBehavioralRankerConfig,
+) -> tuple[str, ...]:
+    """Rank one customer's candidates with LightGBM blended with deterministic prior."""
+
+    values = list(candidate_features.values())
+    if not values:
+        return ()
+    x_rows = [
+        lightgbm_behavioral_feature_vector(
+            features,
+            behavioral_features,
+            config.deterministic_weights,
+        )
+        for features in values
+    ]
+    deterministic_scores = [
+        score_candidate(features, config.deterministic_weights) for features in values
+    ]
+    model_scores = tuple(
+        float(score) for score in model.predict(np.asarray(x_rows, dtype=np.float32))
+    )
+    blend_scores = _per_customer_zscore_blend(
+        deterministic_scores,
+        model_scores,
+        config.blend_lambda,
+    )
+    return _rank_by_scores(values, blend_scores, config.k)
+
+
+def rank_lightgbm_behavioral_candidate_groups(
+    *,
+    np: Any,
+    model: Any,
+    grouped_candidate_features: Sequence[tuple[str, Mapping[str, CandidateFeatures]]],
+    behavioral_features: CutoffBehavioralFeatures,
+    config: LightGBMBehavioralRankerConfig,
+) -> dict[str, tuple[str, ...]]:
+    """Batch-rank multiple customers' candidates with one LightGBM prediction call."""
+
+    all_values: list[tuple[str, list[CandidateFeatures]]] = []
+    offsets: list[tuple[int, int]] = []
+    x_rows: list[tuple[float, ...]] = []
+    deterministic_scores: list[float] = []
+    cursor = 0
+    for customer_id, article_features in grouped_candidate_features:
+        values = list(article_features.values())
+        all_values.append((customer_id, values))
+        offsets.append((cursor, cursor + len(values)))
+        cursor += len(values)
+        for features in values:
+            x_rows.append(
+                lightgbm_behavioral_feature_vector(
+                    features,
+                    behavioral_features,
+                    config.deterministic_weights,
+                )
+            )
+            deterministic_scores.append(score_candidate(features, config.deterministic_weights))
+
+    model_scores = model.predict(np.asarray(x_rows, dtype=np.float32)) if x_rows else []
+    ranked_by_customer: dict[str, tuple[str, ...]] = {}
+    for (customer_id, values), (start, end) in zip(all_values, offsets, strict=True):
+        customer_deterministic_scores = deterministic_scores[start:end]
+        customer_model_scores = tuple(float(score) for score in model_scores[start:end])
+        customer_blend_scores = _per_customer_zscore_blend(
+            customer_deterministic_scores,
+            customer_model_scores,
+            config.blend_lambda,
+        )
+        ranked_by_customer[customer_id] = _rank_by_scores(values, customer_blend_scores, config.k)
+    return ranked_by_customer
+
+
 def _repeated_customer_block_error(customer_id: str) -> ValueError:
     return ValueError(f"candidate CSV contains repeated customer block: {customer_id}")
 
@@ -346,15 +606,21 @@ def _build_train_matrix(
     validation_labels: Mapping[str, set[str]],
     behavioral_features: CutoffBehavioralFeatures,
     config: LightGBMBehavioralRankerConfig,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> tuple[Any, Any, list[int], int, int]:
     x_rows: list[tuple[float, ...]] = []
     y_rows: list[int] = []
     groups: list[int] = []
     unique_pair_count = 0
     positive_pair_count = 0
-    for customer_id in sorted(validation_labels):
+    for customer_index, customer_id in enumerate(sorted(validation_labels), start=1):
         candidate_features = features_by_customer.get(customer_id, {})
         if not candidate_features:
+            if customer_index % config.chunk_customers == 0:
+                _notify(
+                    progress_callback,
+                    f"processed training customers: {customer_index}/{len(validation_labels)}",
+                )
             continue
         actual = validation_labels[customer_id]
         values = list(candidate_features.values())
@@ -382,6 +648,12 @@ def _build_train_matrix(
                 )
             )
             y_rows.append(int(features.article_id in actual))
+        if customer_index % config.chunk_customers == 0:
+            _notify(
+                progress_callback,
+                f"processed training customers: {customer_index}/{len(validation_labels)} "
+                f"rows={len(y_rows)} positives={positive_pair_count}",
+            )
     return (
         np.asarray(x_rows, dtype=np.float32),
         np.asarray(y_rows, dtype=np.int32),
@@ -399,6 +671,7 @@ def _evaluate_streaming(
     validation_labels: Mapping[str, set[str]],
     behavioral_features: CutoffBehavioralFeatures,
     config: LightGBMBehavioralRankerConfig,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> _StreamingMetrics:
     deterministic_ap_sum = 0.0
     deterministic_recall_sum = 0.0
@@ -443,6 +716,11 @@ def _evaluate_streaming(
                 evaluated_customers,
                 unique_candidate_pairs,
             )
+            _notify(
+                progress_callback,
+                f"scored evaluation customers: {evaluated_customers}/{len(validation_labels)} "
+                f"pairs={unique_candidate_pairs}",
+            )
             chunk = []
     if chunk:
         chunk_metrics = _score_grouped_chunk(
@@ -472,6 +750,11 @@ def _evaluate_streaming(
             blend_recall_sum,
             evaluated_customers,
             unique_candidate_pairs,
+        )
+        _notify(
+            progress_callback,
+            f"scored evaluation customers: {evaluated_customers}/{len(validation_labels)} "
+            f"pairs={unique_candidate_pairs}",
         )
     if evaluated_customers == 0:
         raise ValueError("evaluation candidate file produced no labeled customer groups")
@@ -629,6 +912,11 @@ def _mean_and_std(values: tuple[float, ...]) -> tuple[float, float]:
 
 def _labels_as_sets(labels: Mapping[str, Iterable[str]]) -> dict[str, set[str]]:
     return {customer_id: set(article_ids) for customer_id, article_ids in labels.items()}
+
+
+def _notify(progress_callback: Callable[[str], None] | None, message: str) -> None:
+    if progress_callback is not None:
+        progress_callback(message)
 
 
 def _import_lightgbm_runtime() -> tuple[Any, Any]:
