@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
@@ -43,14 +43,29 @@ class ArticleStats:
             self.last_seen = seen_date
 
 
+DEFAULT_SHORT_TERM_POPULARITY_LOOKBACK_DAYS: tuple[int, ...] = (1, 3)
+"""Default short-term popularity lookbacks emitted as additional source rows.
+
+Without these short windows the ranker's ``recent_popularity_1d`` and
+``recent_popularity_3d`` features were always zero because the retrieval
+stage never emitted them. Phase 0.6 of the SDD plan flagged this as a real
+MAP@12 leak: the linear/deterministic rankers reserved weights for those
+features but the retrieval pipeline produced no candidates to score.
+"""
+
+
 @dataclass(frozen=True)
 class BaselineCandidateSources:
     """Reusable source rankings for repeat and popularity retrieval.
 
     Attributes:
         repeat_recommendations: Customer-specific repeat-purchase rankings.
-        recent_popularity: Globally popular articles in the recent lookback.
+        recent_popularity: Globally popular articles in the recent lookback
+            (``popularity_lookback_days`` window, typically 7 days).
         all_time_popularity: Globally popular articles across all pre-cutoff rows.
+        recent_popularity_by_lookback: Short-term recent-popularity rankings
+            keyed by lookback length in days (e.g. ``{1: (...), 3: (...)}``).
+            Empty when no short-term lookbacks are requested.
         customer_train_purchase_counts: Pre-cutoff purchase counts for target customers.
         train_rows_used: Number of pre-cutoff transaction rows consumed.
     """
@@ -60,6 +75,7 @@ class BaselineCandidateSources:
     all_time_popularity: tuple[str, ...]
     customer_train_purchase_counts: dict[str, int]
     train_rows_used: int
+    recent_popularity_by_lookback: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -230,6 +246,9 @@ def build_repeat_popularity_candidate_sources(
     popularity_lookback_days: int = 7,
     progress_interval: int | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    short_term_popularity_lookback_days: Sequence[
+        int
+    ] = DEFAULT_SHORT_TERM_POPULARITY_LOOKBACK_DAYS,
 ) -> BaselineCandidateSources:
     """Build source rankings without materializing final predictions per customer.
 
@@ -238,16 +257,21 @@ def build_repeat_popularity_candidate_sources(
         split: Temporal split defining the training cutoff.
         target_customer_ids: Customers for whom repeat-history sources are needed.
         k: Maximum per-customer repeat ranking depth.
-        popularity_lookback_days: Number of days before cutoff used for recent
-            popularity.
+        popularity_lookback_days: Number of days before cutoff used for the
+            primary ``recent_popularity`` ranking.
         progress_interval: Optional transaction-row interval for progress callbacks.
         progress_callback: Optional callback receiving scanned transaction rows.
+        short_term_popularity_lookback_days: Additional shorter lookback windows
+            (in days) for which independent ``recent_popularity_<N>d`` rankings
+            should be emitted. Defaults to ``(1, 3)``. Pass ``()`` to skip
+            short-term lookbacks for legacy behaviour.
 
     Returns:
         Repeat and popularity source rankings plus training counts.
 
     Raises:
-        ValueError: If ``k`` or ``popularity_lookback_days`` is not positive.
+        ValueError: If ``k``, ``popularity_lookback_days``, or any short-term
+            lookback is not positive.
     """
 
     if k <= 0:
@@ -256,10 +280,22 @@ def build_repeat_popularity_candidate_sources(
         raise ValueError("popularity_lookback_days must be positive")
     if progress_interval is not None and progress_interval <= 0:
         raise ValueError("progress_interval must be positive when provided")
+    short_term_lookbacks = tuple(
+        sorted({int(value) for value in short_term_popularity_lookback_days})
+    )
+    for lookback in short_term_lookbacks:
+        if lookback <= 0:
+            raise ValueError("short_term_popularity_lookback_days values must be positive")
 
     target_customer_set = set(target_customer_ids)
     recent_start = split.cutoff - timedelta(days=popularity_lookback_days)
+    short_term_starts: dict[int, date] = {
+        lookback: split.cutoff - timedelta(days=lookback) for lookback in short_term_lookbacks
+    }
     recent_popularity_stats: dict[str, ArticleStats] = {}
+    short_term_popularity_stats: dict[int, dict[str, ArticleStats]] = {
+        lookback: {} for lookback in short_term_lookbacks
+    }
     all_time_popularity_stats: dict[str, ArticleStats] = {}
     repeat_stats: dict[str, dict[str, ArticleStats]] = {}
     customer_train_purchase_counts: dict[str, int] = {}
@@ -276,6 +312,13 @@ def build_repeat_popularity_candidate_sources(
             _update_article_stats(
                 recent_popularity_stats, transaction.article_id, transaction.t_dat
             )
+        for lookback, start in short_term_starts.items():
+            if transaction.t_dat >= start:
+                _update_article_stats(
+                    short_term_popularity_stats[lookback],
+                    transaction.article_id,
+                    transaction.t_dat,
+                )
         if transaction.customer_id in target_customer_set:
             customer_train_purchase_counts[transaction.customer_id] = (
                 customer_train_purchase_counts.get(transaction.customer_id, 0) + 1
@@ -297,6 +340,10 @@ def build_repeat_popularity_candidate_sources(
     all_time_popularity = rank_article_stats(
         all_time_popularity_stats, limit=max(k, len(all_time_popularity_stats))
     )
+    recent_popularity_by_lookback = {
+        lookback: rank_article_stats(stats, limit=max(k, len(stats)))
+        for lookback, stats in short_term_popularity_stats.items()
+    }
     repeat_recommendations = {
         customer_id: rank_article_stats(article_stats, limit=k)
         for customer_id, article_stats in repeat_stats.items()
@@ -307,6 +354,7 @@ def build_repeat_popularity_candidate_sources(
         all_time_popularity=all_time_popularity,
         customer_train_purchase_counts=customer_train_purchase_counts,
         train_rows_used=train_rows_used,
+        recent_popularity_by_lookback=recent_popularity_by_lookback,
     )
 
 
