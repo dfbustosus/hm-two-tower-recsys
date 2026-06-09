@@ -34,11 +34,16 @@ ARTICLE_ATTRIBUTE_COLUMNS = tuple(column for column, _ in ARTICLE_ATTRIBUTE_FEAT
 BEHAVIORAL_FEATURE_NAMES = (
     "customer_transaction_count_log",
     "customer_unique_article_count_log",
+    "customer_1d_transaction_count_log",
+    "customer_3d_transaction_count_log",
     "customer_7d_transaction_count_log",
     "customer_30d_transaction_count_log",
+    "customer_1d_to_7d_transaction_ratio",
+    "customer_3d_to_7d_transaction_ratio",
     "customer_7d_to_30d_transaction_ratio",
     "customer_30d_to_all_time_transaction_ratio",
     "customer_days_since_last_purchase",
+    "customer_tenure_days_log",
     "article_all_time_purchase_count_log",
     "article_1d_purchase_count_log",
     "article_3d_purchase_count_log",
@@ -123,9 +128,12 @@ class CutoffBehavioralFeatures:
     missing_days_since: float
     customer_transaction_counts: dict[str, int]
     customer_unique_article_counts: dict[str, int]
+    customer_transaction_counts_1d: dict[str, int]
+    customer_transaction_counts_3d: dict[str, int]
     customer_transaction_counts_7d: dict[str, int]
     customer_transaction_counts_30d: dict[str, int]
     customer_last_purchase_dates: dict[str, date]
+    customer_first_purchase_dates: dict[str, date]
     article_purchase_counts: dict[str, int]
     article_purchase_counts_1d: dict[str, int]
     article_purchase_counts_3d: dict[str, int]
@@ -165,6 +173,8 @@ class CutoffBehavioralFeatures:
             (customer_id, article_id)
         )
         customer_transaction_count = self.customer_transaction_counts.get(customer_id, 0)
+        customer_transaction_count_1d = self.customer_transaction_counts_1d.get(customer_id, 0)
+        customer_transaction_count_3d = self.customer_transaction_counts_3d.get(customer_id, 0)
         customer_transaction_count_7d = self.customer_transaction_counts_7d.get(customer_id, 0)
         customer_transaction_count_30d = self.customer_transaction_counts_30d.get(customer_id, 0)
         article_purchase_count = self.article_purchase_counts.get(article_id, 0)
@@ -198,14 +208,25 @@ class CutoffBehavioralFeatures:
         attribute_30d_ratio_features = self._attribute_30d_ratio_features(customer_id, article_id)
         attribute_recency_features = self._attribute_recency_features(customer_id, article_id)
         article_attribute_trend_features = self._article_attribute_trend_features(article_id)
+        customer_first_date = self.customer_first_purchase_dates.get(customer_id)
+        customer_tenure_days = (
+            (self.cutoff - customer_first_date).days
+            if customer_first_date is not None
+            else self.missing_days_since
+        )
         return (
             log1p(customer_transaction_count),
             log1p(self.customer_unique_article_counts.get(customer_id, 0)),
+            log1p(customer_transaction_count_1d),
+            log1p(customer_transaction_count_3d),
             log1p(customer_transaction_count_7d),
             log1p(customer_transaction_count_30d),
+            _safe_ratio(customer_transaction_count_1d, customer_transaction_count_7d),
+            _safe_ratio(customer_transaction_count_3d, customer_transaction_count_7d),
             _safe_ratio(customer_transaction_count_7d, customer_transaction_count_30d),
             _safe_ratio(customer_transaction_count_30d, customer_transaction_count),
             self._days_since(customer_last_date),
+            log1p(max(0, customer_tenure_days)),
             log1p(article_purchase_count),
             log1p(article_purchase_count_1d),
             log1p(article_purchase_count_3d),
@@ -387,9 +408,12 @@ def build_cutoff_behavioral_features(
 
     customer_transaction_counts: dict[str, int] = {}
     customer_unique_articles: dict[str, set[str]] = {}
+    customer_transaction_counts_1d: dict[str, int] = {}
+    customer_transaction_counts_3d: dict[str, int] = {}
     customer_transaction_counts_7d: dict[str, int] = {}
     customer_transaction_counts_30d: dict[str, int] = {}
     customer_last_purchase_dates: dict[str, date] = {}
+    customer_first_purchase_dates: dict[str, date] = {}
     article_purchase_counts: dict[str, int] = {}
     article_purchase_counts_1d: dict[str, int] = {}
     article_purchase_counts_3d: dict[str, int] = {}
@@ -425,12 +449,21 @@ def build_cutoff_behavioral_features(
             customer_unique_articles.setdefault(transaction.customer_id, set()).add(
                 transaction.article_id
             )
+            if days_before_cutoff <= 1:
+                _increment(customer_transaction_counts_1d, transaction.customer_id)
+            if days_before_cutoff <= 3:
+                _increment(customer_transaction_counts_3d, transaction.customer_id)
             if days_before_cutoff <= 7:
                 _increment(customer_transaction_counts_7d, transaction.customer_id)
             if days_before_cutoff <= 30:
                 _increment(customer_transaction_counts_30d, transaction.customer_id)
             _set_latest(
                 customer_last_purchase_dates,
+                transaction.customer_id,
+                transaction.t_dat,
+            )
+            _set_earliest(
+                customer_first_purchase_dates,
                 transaction.customer_id,
                 transaction.t_dat,
             )
@@ -488,9 +521,12 @@ def build_cutoff_behavioral_features(
             customer_id: len(article_ids)
             for customer_id, article_ids in customer_unique_articles.items()
         },
+        customer_transaction_counts_1d=customer_transaction_counts_1d,
+        customer_transaction_counts_3d=customer_transaction_counts_3d,
         customer_transaction_counts_7d=customer_transaction_counts_7d,
         customer_transaction_counts_30d=customer_transaction_counts_30d,
         customer_last_purchase_dates=customer_last_purchase_dates,
+        customer_first_purchase_dates=customer_first_purchase_dates,
         article_purchase_counts=article_purchase_counts,
         article_purchase_counts_1d=article_purchase_counts_1d,
         article_purchase_counts_3d=article_purchase_counts_3d,
@@ -579,6 +615,16 @@ def _set_latest(
 ) -> None:
     current = mapping.get(key)
     if current is None or value > current:
+        mapping[key] = value
+
+
+def _set_earliest(
+    mapping: dict[FeatureKey, date],
+    key: FeatureKey,
+    value: date,
+) -> None:
+    current = mapping.get(key)
+    if current is None or value < current:
         mapping[key] = value
 
 
