@@ -61,6 +61,41 @@ def test_cutoff_behavioral_features_ignore_validation_window_transactions() -> N
     assert vector[user_article_recency_index] == 1.0
 
 
+def test_cutoff_behavioral_features_include_customer_momentum_and_tenure() -> None:
+    """Customer 1d/3d transaction counts, momentum ratios and tenure feed Phase-1 features."""
+
+    cutoff = date(2020, 9, 16)
+    transactions = (
+        TransactionEvent(date(2020, 8, 1), CUSTOMER_1, ARTICLE_1),
+        TransactionEvent(date(2020, 8, 20), CUSTOMER_1, ARTICLE_2),
+        TransactionEvent(date(2020, 9, 10), CUSTOMER_1, ARTICLE_1),
+        TransactionEvent(date(2020, 9, 13), CUSTOMER_1, ARTICLE_2),
+        TransactionEvent(date(2020, 9, 14), CUSTOMER_1, ARTICLE_1),
+        TransactionEvent(date(2020, 9, 15), CUSTOMER_1, ARTICLE_3),
+    )
+
+    features = build_cutoff_behavioral_features(transactions, cutoff)
+    vector = features.vector_for(CUSTOMER_1, ARTICLE_1)
+
+    customer_1d_index = BEHAVIORAL_FEATURE_NAMES.index("customer_1d_transaction_count_log")
+    customer_3d_index = BEHAVIORAL_FEATURE_NAMES.index("customer_3d_transaction_count_log")
+    customer_7d_index = BEHAVIORAL_FEATURE_NAMES.index("customer_7d_transaction_count_log")
+    customer_1d_to_7d_index = BEHAVIORAL_FEATURE_NAMES.index(
+        "customer_1d_to_7d_transaction_ratio"
+    )
+    customer_3d_to_7d_index = BEHAVIORAL_FEATURE_NAMES.index(
+        "customer_3d_to_7d_transaction_ratio"
+    )
+    tenure_index = BEHAVIORAL_FEATURE_NAMES.index("customer_tenure_days_log")
+
+    assert vector[customer_1d_index] == pytest.approx(log1p(1))
+    assert vector[customer_3d_index] == pytest.approx(log1p(3))
+    assert vector[customer_7d_index] == pytest.approx(log1p(4))
+    assert vector[customer_1d_to_7d_index] == pytest.approx(1.0 / 4.0)
+    assert vector[customer_3d_to_7d_index] == pytest.approx(3.0 / 4.0)
+    assert vector[tenure_index] == pytest.approx(log1p((cutoff - date(2020, 8, 1)).days))
+
+
 def test_cutoff_behavioral_features_include_recent_trend_ratios() -> None:
     cutoff = date(2020, 9, 16)
     transactions = (
