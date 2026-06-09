@@ -9,17 +9,27 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
 
 from hm_recsys.data.io import TransactionEvent
 from hm_recsys.evaluation.submission import SubmissionValidationResult
 from hm_recsys.evaluation.temporal import TemporalSplit
+from hm_recsys.ranking.behavioral import (
+    ArticleAttributeMap,
+    BehavioralTransaction,
+    build_cutoff_behavioral_features,
+)
 from hm_recsys.ranking.deterministic import (
+    CandidateFeatures,
     DeterministicRankerWeights,
     aggregate_candidate_features,
     rank_candidates_by_customer,
 )
 from hm_recsys.ranking.deterministic_tuning import DeterministicRankerWeightSelection
+from hm_recsys.ranking.lightgbm_behavioral import (
+    LightGBMBehavioralRankerConfig,
+    rank_lightgbm_behavioral_candidate_groups,
+)
 from hm_recsys.ranking.linear import (
     LinearRankerConfig,
     LinearRankerModel,
@@ -38,7 +48,13 @@ from hm_recsys.retrieval.co_visitation import (
 )
 from hm_recsys.retrieval.metadata_affinity import (
     GARMENT_GROUP_COLUMN,
+    PRODUCT_CODE_COLUMN,
     build_article_attribute_popularity_index,
+)
+from hm_recsys.retrieval.seasonality import (
+    DEFAULT_SEASONAL_SHIFT_DAYS,
+    DEFAULT_SEASONAL_WINDOW_DAYS,
+    build_seasonal_popularity_index,
 )
 from hm_recsys.retrieval.segment_popularity import (
     DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
@@ -156,6 +172,17 @@ class DeterministicRankerSubmissionPredictions:
 
 
 @dataclass(frozen=True)
+class LightGBMBehavioralRankerSubmissionPredictions:
+    """Final-data predictions produced by the rich LightGBM behavioral ranker."""
+
+    predictions: dict[str, tuple[str, ...]]
+    final_training_cutoff: str
+    max_transaction_date: str | None
+    runtime_seconds: float
+    diagnostics: LinearRankerSubmissionDiagnostics
+
+
+@dataclass(frozen=True)
 class DeterministicRankerSubmissionReport:
     """Experiment report for a tuned deterministic-ranker submission.
 
@@ -172,6 +199,9 @@ class DeterministicRankerSubmissionReport:
         include_co_visitation: Whether co-visitation source rows were used.
         co_visitation_max_history_items: Co-visitation customer-history length.
         co_visitation_max_neighbors_per_item: Co-visitation neighbor cap per item.
+        include_seasonal_popularity: Whether shifted-window seasonal source rows were used.
+        seasonal_shift_days: Historical shift between cutoff and seasonal window start.
+        seasonal_window_days: Length of the shifted historical seasonal window.
         include_age_segment_popularity: Whether age-segment source rows were used.
         age_segment_bucket_size: Age bucket width when age source is enabled.
         age_segment_popularity_lookback_days: Age-segment source lookback.
@@ -201,6 +231,9 @@ class DeterministicRankerSubmissionReport:
     include_co_visitation: bool
     co_visitation_max_history_items: int
     co_visitation_max_neighbors_per_item: int
+    include_seasonal_popularity: bool
+    seasonal_shift_days: int | None
+    seasonal_window_days: int | None
     include_age_segment_popularity: bool
     age_segment_bucket_size: int | None
     age_segment_popularity_lookback_days: int | None
@@ -383,6 +416,9 @@ def build_deterministic_ranker_submission_predictions(
     include_co_visitation: bool = True,
     co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    include_seasonal_popularity: bool = False,
+    seasonal_shift_days: int = DEFAULT_SEASONAL_SHIFT_DAYS,
+    seasonal_window_days: int = DEFAULT_SEASONAL_WINDOW_DAYS,
     include_age_segment_popularity: bool = False,
     customer_segment_by_id: dict[str, str] | None = None,
     age_segment_bucket_size: int = DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
@@ -391,6 +427,10 @@ def build_deterministic_ranker_submission_predictions(
     article_garment_group_by_id: dict[str, str] | None = None,
     garment_group_popularity_lookback_days: int | None = None,
     garment_group_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    include_product_code_popularity: bool = False,
+    article_product_code_by_id: dict[str, str] | None = None,
+    product_code_popularity_lookback_days: int | None = None,
+    product_code_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
     two_tower_model: TwoTowerSmokeModel | None = None,
     two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
     two_tower_max_retrieval_articles: int | None = 5000,
@@ -421,6 +461,10 @@ def build_deterministic_ranker_submission_predictions(
         raise ValueError("transaction_progress_interval must be positive when provided")
     if progress_interval is not None and progress_interval <= 0:
         raise ValueError("progress_interval must be positive when provided")
+    if seasonal_shift_days <= 0:
+        raise ValueError("seasonal_shift_days must be positive")
+    if seasonal_window_days <= 0:
+        raise ValueError("seasonal_window_days must be positive")
     if include_age_segment_popularity and customer_segment_by_id is None:
         raise ValueError("customer_segment_by_id is required for age-segment popularity")
     if age_segment_bucket_size <= 0:
@@ -443,6 +487,17 @@ def build_deterministic_ranker_submission_predictions(
     )
     if resolved_garment_group_lookback_days <= 0:
         raise ValueError("garment_group_popularity_lookback_days must be positive")
+    if include_product_code_popularity and article_product_code_by_id is None:
+        raise ValueError("article_product_code_by_id is required for product-code popularity")
+    if product_code_max_history_items <= 0:
+        raise ValueError("product_code_max_history_items must be positive")
+    resolved_product_code_lookback_days = (
+        product_code_popularity_lookback_days
+        if product_code_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_product_code_lookback_days <= 0:
+        raise ValueError("product_code_popularity_lookback_days must be positive")
     if two_tower_model is not None and not two_tower_source_name:
         raise ValueError("two_tower_source_name must not be empty")
     if two_tower_max_retrieval_articles is not None and two_tower_max_retrieval_articles <= 0:
@@ -489,6 +544,17 @@ def build_deterministic_ranker_submission_predictions(
     )
     if status_callback is not None and include_co_visitation:
         status_callback("co-visitation index ready")
+    seasonal_popularity_index = (
+        build_seasonal_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            shift_days=seasonal_shift_days,
+            window_days=seasonal_window_days,
+            max_articles=candidate_k,
+        )
+        if include_seasonal_popularity
+        else None
+    )
     age_segment_index = (
         build_age_segment_popularity_index(
             transactions=transaction_iter_factory(),
@@ -514,6 +580,20 @@ def build_deterministic_ranker_submission_predictions(
         if include_garment_group_popularity
         else None
     )
+    product_code_index_det = (
+        build_article_attribute_popularity_index(
+            transactions=transaction_iter_factory(),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            article_attribute_by_id=article_product_code_by_id or {},
+            attribute_name=PRODUCT_CODE_COLUMN,
+            lookback_days=resolved_product_code_lookback_days,
+            max_history_items=product_code_max_history_items,
+            max_articles_per_attribute=candidate_k,
+        )
+        if include_product_code_popularity
+        else None
+    )
     popularity_backfill = merge_ranked_sources(
         (baseline_sources.recent_popularity, baseline_sources.all_time_popularity),
         k=k,
@@ -531,8 +611,10 @@ def build_deterministic_ranker_submission_predictions(
                 recent_popularity=baseline_sources.recent_popularity,
                 all_time_popularity=baseline_sources.all_time_popularity,
                 co_visitation_index=co_visitation_index,
+                seasonal_popularity_index=seasonal_popularity_index,
                 age_segment_index=age_segment_index,
                 garment_group_index=garment_group_index,
+                product_code_index=product_code_index_det,
                 two_tower_model=two_tower_model,
                 two_tower_source_name=two_tower_source_name,
                 two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
@@ -566,6 +648,273 @@ def build_deterministic_ranker_submission_predictions(
         max_transaction_date=(max_transaction_date.isoformat() if max_transaction_date else None),
         runtime_seconds=perf_counter() - started_at,
         weights=weights,
+        diagnostics=diagnostics,
+    )
+
+
+def build_lightgbm_behavioral_ranker_submission_predictions(
+    transaction_iter_factory: Callable[[], Iterable[BehavioralTransaction]],
+    split: TemporalSplit,
+    target_customer_ids: Iterable[str],
+    np: Any,
+    model: Any,
+    config: LightGBMBehavioralRankerConfig,
+    article_attributes_by_id: ArticleAttributeMap | None = None,
+    k: int = 12,
+    candidate_k: int = 12,
+    popularity_lookback_days: int = 7,
+    include_co_visitation: bool = True,
+    co_visitation_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    co_visitation_max_neighbors_per_item: int = DEFAULT_MAX_NEIGHBORS_PER_ITEM,
+    include_seasonal_popularity: bool = False,
+    seasonal_shift_days: int = DEFAULT_SEASONAL_SHIFT_DAYS,
+    seasonal_window_days: int = DEFAULT_SEASONAL_WINDOW_DAYS,
+    include_age_segment_popularity: bool = False,
+    customer_segment_by_id: dict[str, str] | None = None,
+    age_segment_bucket_size: int = DEFAULT_AGE_SEGMENT_BUCKET_SIZE,
+    age_segment_popularity_lookback_days: int | None = None,
+    include_garment_group_popularity: bool = False,
+    article_garment_group_by_id: dict[str, str] | None = None,
+    garment_group_popularity_lookback_days: int | None = None,
+    garment_group_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    include_product_code_popularity: bool = False,
+    article_product_code_by_id: dict[str, str] | None = None,
+    product_code_popularity_lookback_days: int | None = None,
+    product_code_max_history_items: int = DEFAULT_MAX_HISTORY_ITEMS,
+    two_tower_model: TwoTowerSmokeModel | None = None,
+    two_tower_source_name: str = TWO_TOWER_RETRIEVAL_SOURCE,
+    two_tower_max_retrieval_articles: int | None = 5000,
+    max_transaction_date: date | None = None,
+    transaction_progress_interval: int | None = None,
+    transaction_progress_callback: Callable[[str, int], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
+    progress_interval: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> LightGBMBehavioralRankerSubmissionPredictions:
+    """Generate final-data predictions with a trained LightGBM behavioral ranker."""
+
+    if k <= 0:
+        raise ValueError("k must be positive")
+    if candidate_k <= 0:
+        raise ValueError("candidate_k must be positive")
+    if config.k != k:
+        raise ValueError("LightGBM config.k must match submission k")
+    if popularity_lookback_days <= 0:
+        raise ValueError("popularity_lookback_days must be positive")
+    if transaction_progress_interval is not None and transaction_progress_interval <= 0:
+        raise ValueError("transaction_progress_interval must be positive when provided")
+    if progress_interval is not None and progress_interval <= 0:
+        raise ValueError("progress_interval must be positive when provided")
+    if seasonal_shift_days <= 0:
+        raise ValueError("seasonal_shift_days must be positive")
+    if seasonal_window_days <= 0:
+        raise ValueError("seasonal_window_days must be positive")
+    if include_age_segment_popularity and customer_segment_by_id is None:
+        raise ValueError("customer_segment_by_id is required for age-segment popularity")
+    if age_segment_bucket_size <= 0:
+        raise ValueError("age_segment_bucket_size must be positive")
+    resolved_age_segment_lookback_days = (
+        age_segment_popularity_lookback_days
+        if age_segment_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_age_segment_lookback_days <= 0:
+        raise ValueError("age_segment_popularity_lookback_days must be positive")
+    if include_garment_group_popularity and article_garment_group_by_id is None:
+        raise ValueError("article_garment_group_by_id is required for garment-group popularity")
+    if garment_group_max_history_items <= 0:
+        raise ValueError("garment_group_max_history_items must be positive")
+    resolved_garment_group_lookback_days = (
+        garment_group_popularity_lookback_days
+        if garment_group_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_garment_group_lookback_days <= 0:
+        raise ValueError("garment_group_popularity_lookback_days must be positive")
+    if include_product_code_popularity and article_product_code_by_id is None:
+        raise ValueError("article_product_code_by_id is required for product-code popularity")
+    if product_code_max_history_items <= 0:
+        raise ValueError("product_code_max_history_items must be positive")
+    resolved_product_code_lookback_days_lgbm = (
+        product_code_popularity_lookback_days
+        if product_code_popularity_lookback_days is not None
+        else popularity_lookback_days
+    )
+    if resolved_product_code_lookback_days_lgbm <= 0:
+        raise ValueError("product_code_popularity_lookback_days must be positive")
+    if two_tower_model is not None and not two_tower_source_name:
+        raise ValueError("two_tower_source_name must not be empty")
+    if two_tower_max_retrieval_articles is not None and two_tower_max_retrieval_articles <= 0:
+        raise ValueError("two_tower_max_retrieval_articles must be positive when provided")
+
+    started_at = perf_counter()
+    target_customer_tuple = tuple(target_customer_ids)
+    if status_callback is not None:
+        status_callback("building final cutoff-safe behavioral features")
+    behavioral_features = build_cutoff_behavioral_features(
+        transaction_iter_factory(),
+        split.cutoff,
+        target_customer_ids=target_customer_tuple,
+        article_attributes_by_id=article_attributes_by_id,
+    )
+    if status_callback is not None:
+        status_callback("building repeat/popularity candidate sources")
+    baseline_sources = build_repeat_popularity_candidate_sources(
+        transactions=cast(Iterable[TransactionEvent], transaction_iter_factory()),
+        split=split,
+        target_customer_ids=target_customer_tuple,
+        k=candidate_k,
+        popularity_lookback_days=popularity_lookback_days,
+        progress_interval=transaction_progress_interval,
+        progress_callback=(
+            None
+            if transaction_progress_callback is None
+            else lambda rows: transaction_progress_callback("repeat_popularity", rows)
+        ),
+    )
+    if status_callback is not None:
+        status_callback("repeat/popularity candidate sources ready")
+        if include_co_visitation:
+            status_callback("building co-visitation index")
+    co_visitation_index = (
+        build_co_visitation_index(
+            transactions=cast(Iterable[TransactionEvent], transaction_iter_factory()),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            max_history_items=co_visitation_max_history_items,
+            max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+            progress_interval=transaction_progress_interval,
+            progress_callback=(
+                None
+                if transaction_progress_callback is None
+                else lambda rows: transaction_progress_callback("co_visitation", rows)
+            ),
+            status_callback=status_callback,
+        )
+        if include_co_visitation
+        else None
+    )
+    if status_callback is not None and include_co_visitation:
+        status_callback("co-visitation index ready")
+    seasonal_popularity_index = (
+        build_seasonal_popularity_index(
+            transactions=cast(Iterable[TransactionEvent], transaction_iter_factory()),
+            split=split,
+            shift_days=seasonal_shift_days,
+            window_days=seasonal_window_days,
+            max_articles=candidate_k,
+        )
+        if include_seasonal_popularity
+        else None
+    )
+    age_segment_index = (
+        build_age_segment_popularity_index(
+            transactions=cast(Iterable[TransactionEvent], transaction_iter_factory()),
+            split=split,
+            customer_segment_by_id=customer_segment_by_id or {},
+            lookback_days=resolved_age_segment_lookback_days,
+            max_articles_per_segment=candidate_k,
+        )
+        if include_age_segment_popularity
+        else None
+    )
+    garment_group_index = (
+        build_article_attribute_popularity_index(
+            transactions=cast(Iterable[TransactionEvent], transaction_iter_factory()),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            article_attribute_by_id=article_garment_group_by_id or {},
+            attribute_name=GARMENT_GROUP_COLUMN,
+            lookback_days=resolved_garment_group_lookback_days,
+            max_history_items=garment_group_max_history_items,
+            max_articles_per_attribute=candidate_k,
+        )
+        if include_garment_group_popularity
+        else None
+    )
+    product_code_index = (
+        build_article_attribute_popularity_index(
+            transactions=cast(Iterable[TransactionEvent], transaction_iter_factory()),
+            split=split,
+            target_customer_ids=target_customer_tuple,
+            article_attribute_by_id=article_product_code_by_id or {},
+            attribute_name=PRODUCT_CODE_COLUMN,
+            lookback_days=resolved_product_code_lookback_days_lgbm,
+            max_history_items=product_code_max_history_items,
+            max_articles_per_attribute=candidate_k,
+        )
+        if include_product_code_popularity
+        else None
+    )
+    popularity_backfill = merge_ranked_sources(
+        (baseline_sources.recent_popularity, baseline_sources.all_time_popularity),
+        k=k,
+    )
+
+    predictions: dict[str, tuple[str, ...]] = {}
+    source_row_counts: Counter[str] = Counter()
+    unique_candidate_pairs = 0
+    total_customers = len(target_customer_tuple)
+    scored_customers = 0
+    grouped_chunk: list[tuple[str, dict[str, CandidateFeatures]]] = []
+
+    def flush_grouped_chunk() -> None:
+        nonlocal scored_customers
+        if not grouped_chunk:
+            return
+        ranked_by_customer = rank_lightgbm_behavioral_candidate_groups(
+            np=np,
+            model=model,
+            grouped_candidate_features=grouped_chunk,
+            behavioral_features=behavioral_features,
+            config=config,
+        )
+        for chunk_customer_id, _ in grouped_chunk:
+            predictions[chunk_customer_id] = merge_ranked_sources(
+                (ranked_by_customer.get(chunk_customer_id, ()), popularity_backfill),
+                k=k,
+            )
+        scored_customers += len(grouped_chunk)
+        grouped_chunk.clear()
+        if progress_callback is not None and progress_interval is not None:
+            progress_callback(scored_customers, total_customers)
+
+    for customer_index, customer_id in enumerate(target_customer_tuple, start=1):
+        records = tuple(
+            iter_candidate_records_for_customer(
+                customer_id=customer_id,
+                repeat_recommendations=baseline_sources.repeat_recommendations,
+                recent_popularity=baseline_sources.recent_popularity,
+                all_time_popularity=baseline_sources.all_time_popularity,
+                co_visitation_index=co_visitation_index,
+                seasonal_popularity_index=seasonal_popularity_index,
+                age_segment_index=age_segment_index,
+                garment_group_index=garment_group_index,
+                product_code_index=product_code_index,
+                two_tower_model=two_tower_model,
+                two_tower_source_name=two_tower_source_name,
+                two_tower_max_retrieval_articles=two_tower_max_retrieval_articles,
+                k=candidate_k,
+            )
+        )
+        source_row_counts.update(record.source for record in records)
+        unique_candidate_pairs += len({record.article_id for record in records})
+        features_by_customer = aggregate_candidate_features(records, validation_labels={})
+        grouped_chunk.append((customer_id, features_by_customer.get(customer_id, {})))
+        if len(grouped_chunk) >= config.chunk_customers or customer_index == total_customers:
+            flush_grouped_chunk()
+
+    diagnostics = build_linear_ranker_submission_diagnostics(
+        predictions=predictions,
+        k=k,
+        unique_candidate_pairs=unique_candidate_pairs,
+        source_row_counts=dict(sorted(source_row_counts.items())),
+    )
+    return LightGBMBehavioralRankerSubmissionPredictions(
+        predictions=predictions,
+        final_training_cutoff=split.cutoff.isoformat(),
+        max_transaction_date=(max_transaction_date.isoformat() if max_transaction_date else None),
+        runtime_seconds=perf_counter() - started_at,
         diagnostics=diagnostics,
     )
 
@@ -668,6 +1017,9 @@ def build_deterministic_ranker_submission_report(
     include_co_visitation: bool,
     co_visitation_max_history_items: int,
     co_visitation_max_neighbors_per_item: int,
+    include_seasonal_popularity: bool,
+    seasonal_shift_days: int | None,
+    seasonal_window_days: int | None,
     include_age_segment_popularity: bool,
     age_segment_bucket_size: int | None,
     age_segment_popularity_lookback_days: int | None,
@@ -698,6 +1050,9 @@ def build_deterministic_ranker_submission_report(
         include_co_visitation=include_co_visitation,
         co_visitation_max_history_items=co_visitation_max_history_items,
         co_visitation_max_neighbors_per_item=co_visitation_max_neighbors_per_item,
+        include_seasonal_popularity=include_seasonal_popularity,
+        seasonal_shift_days=seasonal_shift_days if include_seasonal_popularity else None,
+        seasonal_window_days=seasonal_window_days if include_seasonal_popularity else None,
         include_age_segment_popularity=include_age_segment_popularity,
         age_segment_bucket_size=age_segment_bucket_size,
         age_segment_popularity_lookback_days=age_segment_popularity_lookback_days,
