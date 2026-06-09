@@ -54,6 +54,7 @@ class LightGBMBehavioralRankerConfig:
     num_threads: int = 4
     chunk_customers: int = 2000
     deterministic_weights: DeterministicRankerWeights = DEFAULT_DETERMINISTIC_RANKER_WEIGHTS
+    objective: str = "lambdarank"
 
     def __post_init__(self) -> None:
         """Validate numeric configuration values."""
@@ -84,12 +85,20 @@ class LightGBMBehavioralRankerConfig:
             raise ValueError("num_threads must be positive")
         if self.chunk_customers <= 0:
             raise ValueError("chunk_customers must be positive")
+        if self.objective not in {"lambdarank", "rank_xendcg"}:
+            raise ValueError("objective must be one of {'lambdarank', 'rank_xendcg'}")
 
     def lightgbm_params(self) -> dict[str, Any]:
-        """Return LightGBM LambdaRank parameters."""
+        """Return LightGBM ranking parameters.
+
+        ``rank_xendcg`` (XE-NDCG) typically outperforms ``lambdarank`` on
+        very large candidate lists because its gradient is well-behaved on
+        long-tail positions; ``lambdarank`` is kept as a fallback for
+        reproducing legacy reports.
+        """
 
         return {
-            "objective": "lambdarank",
+            "objective": self.objective,
             "metric": "ndcg",
             "ndcg_eval_at": [self.k],
             "learning_rate": self.learning_rate,
@@ -487,6 +496,51 @@ def iter_grouped_candidate_features_from_csv(
         if current_customer_id in seen_customers:
             raise _repeated_customer_block_error(current_customer_id)
         yield current_customer_id, current_features
+
+
+@dataclass(frozen=True)
+class LightGBMBehavioralRankerAdapter:
+    """Concrete :class:`hm_recsys.ranking.protocol.Ranker` for LightGBM behavioral models.
+
+    The adapter wraps a trained LightGBM booster plus precomputed cutoff-safe
+    behavioral features and exposes the protocol's batch-ranking entry point.
+
+    Attributes:
+        np: The numpy module reference (injected to avoid eager imports in
+            modules that do not depend on numpy).
+        model: Trained LightGBM booster supporting ``model.predict``.
+        behavioral_features: Cutoff-safe behavioral features keyed by customer.
+        config: Ranker configuration including ``k`` and blend hyperparameters.
+        name: Stable short identifier used in JSON reports. Defaults to
+            ``"lightgbm_behavioral"``.
+    """
+
+    np: Any
+    model: Any
+    behavioral_features: CutoffBehavioralFeatures
+    config: LightGBMBehavioralRankerConfig
+    name: str = "lightgbm_behavioral"
+
+    def rank_customer_batch(
+        self,
+        features_by_customer: Mapping[str, Mapping[str, CandidateFeatures]],
+        *,
+        k: int,
+    ) -> Mapping[str, tuple[str, ...]]:
+        """Batch-score all customers with one LightGBM prediction call."""
+
+        if k != self.config.k:
+            raise ValueError(
+                f"k={k} must match the configured ranker depth config.k={self.config.k}"
+            )
+        grouped = tuple(features_by_customer.items())
+        return rank_lightgbm_behavioral_candidate_groups(
+            np=self.np,
+            model=self.model,
+            grouped_candidate_features=grouped,
+            behavioral_features=self.behavioral_features,
+            config=self.config,
+        )
 
 
 def rank_lightgbm_behavioral_candidate_features(
