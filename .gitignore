@@ -232,6 +232,7 @@ __marimo__/
 wandb/
 mlruns/
 lightning_logs/
+catboost_info/
 bandit-report.*
 gitleaks-report.*
 pip-audit-report.*
