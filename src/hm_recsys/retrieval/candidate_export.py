@@ -88,6 +88,30 @@ CANDIDATE_EXPORT_HEADER = (
     "source_score",
 )
 
+TWO_TOWER_SCORE_COLUMN = "two_tower_score"
+"""Optional sidecar column produced by ``score-two-tower-candidates``."""
+
+CONTENT_USER_COSINE_COLUMN = "content_user_cosine"
+"""Optional sidecar column produced by ``score-content-similarity-candidates``.
+
+Carries the cosine similarity between a per-customer content embedding
+(mean of the customer's recent purchased article FashionCLIP vectors)
+and the candidate article's FashionCLIP vector. ``0.0`` when the
+customer has no pre-cutoff purchase history (cold start).
+"""
+
+KNOWN_AUGMENTED_COLUMNS: tuple[str, ...] = (
+    TWO_TOWER_SCORE_COLUMN,
+    CONTENT_USER_COSINE_COLUMN,
+)
+"""Ordered tuple of all known optional augmentation columns.
+
+Readers accept any subset of these columns appended to the canonical
+header in the order listed here. Adding a new optional column is a
+single-line change here PLUS one new field on :class:`CandidateRecord`
+and one parsing branch in ``iter_candidate_records_from_csv``.
+"""
+
 
 @dataclass(frozen=True)
 class CandidateRecord:
@@ -100,6 +124,12 @@ class CandidateRecord:
         source_rank: One-based rank within that source for the customer.
         source_score: Source-specific numeric score. Ranked-only sources use
             reciprocal rank; co-visitation uses its aggregate item-item score.
+        two_tower_score: Optional pair-level two-tower score (cosine similarity
+            of customer/article embeddings). ``0.0`` when absent.
+        content_user_cosine: Optional pair-level cosine similarity between the
+            customer's recent-purchase content embedding (mean of FashionCLIP
+            vectors) and the candidate article's FashionCLIP vector. ``0.0``
+            when absent or cold-start.
     """
 
     customer_id: str
@@ -107,6 +137,8 @@ class CandidateRecord:
     source: str
     source_rank: int
     source_score: float
+    two_tower_score: float = 0.0
+    content_user_cosine: float = 0.0
 
 
 @dataclass(frozen=True)
