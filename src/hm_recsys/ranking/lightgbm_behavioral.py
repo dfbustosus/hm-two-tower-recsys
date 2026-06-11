@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
@@ -32,7 +32,52 @@ LIGHTGBM_BEHAVIORAL_FEATURE_NAMES = (
     *LINEAR_FEATURE_NAMES,
     "deterministic_score",
     *BEHAVIORAL_FEATURE_NAMES,
+    "two_tower_score",
+    "content_user_cosine",
 )
+"""Feature-name tuple consumed by the LightGBM behavioral ranker.
+
+Optional sidecar features (``two_tower_score``, ``content_user_cosine``)
+are appended at the end so legacy candidate CSVs without those columns
+produce identical feature vectors for every other column, keeping
+booster splits backwards-compatible with checkpoints trained before
+the columns existed (LightGBM saved boosters use feature names, not
+positions; new features simply get zero variance during inference on
+legacy CSVs).
+"""
+
+
+LIGHTGBM_BEHAVIORAL_RANKER_PRIOR_WEIGHTS: DeterministicRankerWeights = replace(
+    DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
+    repeat_presence_weight=3.0,
+    repeat_score_weight=1.0,
+    recent_popularity_presence_weight=0.0,
+    age_segment_popularity_presence_weight=0.45,
+    age_segment_popularity_score_weight=0.1,
+    garment_group_popularity_presence_weight=0.8,
+    garment_group_popularity_score_weight=0.55,
+    co_visitation_presence_weight=1.0,
+    co_visitation_score_weight=0.0,
+    source_count_weight=0.15,
+    best_rank_score_weight=0.0,
+    two_tower_retrieval_presence_weight=1.5,
+    two_tower_retrieval_score_weight=0.0,
+    two_tower_retrieval_rank_weight=0.0,
+    two_tower_retrieval_latest_customer_presence_weight=1.0,
+    two_tower_retrieval_latest_customer_score_weight=0.0,
+    two_tower_retrieval_latest_customer_rank_weight=1.0,
+)
+"""Curated deterministic-prior weights used by the LightGBM behavioral CLI.
+
+These are NOT the bare ``DEFAULT_DETERMINISTIC_RANKER_WEIGHTS``; they were
+hand-tuned against the full-validation diagnostic prior before behavioral
+features were introduced. The LightGBM blend uses this prior as the
+deterministic side of the per-customer z-score blend, so it is the right
+baseline to compare any other ranker (CatBoost, two-tower, ensemble)
+against. See ``cli/_legacy.py::_lightgbm_behavioral_ranker_weights_from_args``
+for the original definition; this constant exists so the same weights can
+be reused from scripts and tests without depending on the legacy CLI.
+"""
 
 
 @dataclass(frozen=True)
@@ -198,7 +243,24 @@ def lightgbm_behavioral_feature_vector(
     behavioral_features: CutoffBehavioralFeatures,
     weights: DeterministicRankerWeights = DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
 ) -> tuple[float, ...]:
-    """Return the feature vector used by the optional LightGBM ranker."""
+    """Return the feature vector used by the optional LightGBM ranker.
+
+    Layout (must stay in lock-step with ``LIGHTGBM_BEHAVIORAL_FEATURE_NAMES``):
+
+    1. ``LINEAR_FEATURE_NAMES`` columns from the deterministic-feature
+       linearization;
+    2. the scalar deterministic score (sum of weighted source rows);
+    3. ``BEHAVIORAL_FEATURE_NAMES`` columns from the cutoff-safe
+       behavioral feature builder;
+    4. ``two_tower_score`` — pair-level two-tower cosine, ``0.0`` when
+       absent;
+    5. ``content_user_cosine`` — pair-level customer/article FashionCLIP
+       cosine, ``0.0`` when absent or cold-start.
+
+    Trailing optional features default to ``0.0``, so this function is a
+    no-op for legacy CSVs and only contributes signal once a real score
+    is plumbed in by their respective augmentation scripts.
+    """
 
     return (
         *feature_vector(candidate_features),
@@ -207,6 +269,8 @@ def lightgbm_behavioral_feature_vector(
             candidate_features.customer_id,
             candidate_features.article_id,
         ),
+        float(candidate_features.two_tower_score),
+        float(candidate_features.content_user_cosine),
     )
 
 
