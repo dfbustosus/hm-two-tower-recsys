@@ -10,6 +10,7 @@ from hm_recsys.ranking.behavioral import BEHAVIORAL_FEATURE_NAMES, build_cutoff_
 from hm_recsys.ranking.deterministic import CandidateFeatures
 from hm_recsys.ranking.lightgbm_behavioral import (
     LIGHTGBM_BEHAVIORAL_FEATURE_NAMES,
+    LIGHTGBM_BEHAVIORAL_RANKER_PRIOR_WEIGHTS,
     LightGBMBehavioralRankerAdapter,
     LightGBMBehavioralRankerConfig,
     iter_grouped_candidate_features_from_csv,
@@ -47,11 +48,20 @@ def test_lightgbm_behavioral_feature_vector_matches_schema() -> None:
         *LINEAR_FEATURE_NAMES,
         "deterministic_score",
         *BEHAVIORAL_FEATURE_NAMES,
+        "two_tower_score",
+        "content_user_cosine",
     ) == LIGHTGBM_BEHAVIORAL_FEATURE_NAMES
     assert len(set(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES)) == len(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES)
     assert len(vector) == len(LIGHTGBM_BEHAVIORAL_FEATURE_NAMES)
     assert vector[LINEAR_FEATURE_NAMES.index("has_repeat")] == 1.0
     assert vector[LIGHTGBM_BEHAVIORAL_FEATURE_NAMES.index("deterministic_score")] > 0.0
+    # Trailing optional features default to 0.0 when their source columns
+    # are absent from the candidate CSV - guards against future
+    # accidental population on the default path.
+    assert vector[LIGHTGBM_BEHAVIORAL_FEATURE_NAMES.index("two_tower_score")] == 0.0
+    assert (
+        vector[LIGHTGBM_BEHAVIORAL_FEATURE_NAMES.index("content_user_cosine")] == 0.0
+    )
 
 
 def test_grouped_candidate_iterator_rejects_repeated_customer_block(tmp_path: Path) -> None:
@@ -190,3 +200,20 @@ def _write_candidate_csv(path: Path, rows: list[tuple[str, str, str, int, float]
         writer = csv.writer(handle)
         writer.writerow(CANDIDATE_EXPORT_HEADER)
         writer.writerows(rows)
+
+
+def test_lightgbm_behavioral_ranker_prior_weights_match_cli_helper() -> None:
+    """The public curated-weights constant must equal the CLI's hand-tuned set.
+
+    This guards against drift: if either the constant or the CLI helper
+    changes, the other must change with it; otherwise the standalone CLI
+    and the scripts that import the constant (ensemble / catboost
+    evaluators) would silently diverge on what they treat as the
+    deterministic-prior baseline.
+    """
+    import argparse
+
+    from hm_recsys.cli._legacy import _lightgbm_behavioral_ranker_weights_from_args
+
+    cli_weights = _lightgbm_behavioral_ranker_weights_from_args(argparse.Namespace())
+    assert cli_weights == LIGHTGBM_BEHAVIORAL_RANKER_PRIOR_WEIGHTS
