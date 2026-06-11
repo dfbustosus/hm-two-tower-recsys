@@ -19,6 +19,7 @@ from hm_recsys.retrieval.source_names import (
     AGE_SEGMENT_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
+    ITEM2VEC_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
     PRODUCT_CODE_POPULARITY_SOURCE,
     RECENT_POPULARITY_1D_SOURCE,
@@ -45,6 +46,13 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
             CandidateRecord(CUSTOMER_ID, ARTICLE_1, SEASONAL_POPULARITY_SOURCE, 3, 0.4),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, CO_VISITATION_SOURCE, 1, 3.0),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, MULTIMODAL_SIMILARITY_SOURCE, 3, 0.8),
+            CandidateRecord(
+                CUSTOMER_ID,
+                ARTICLE_2,
+                ITEM2VEC_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+                2,
+                0.95,
+            ),
             CandidateRecord(CUSTOMER_ID, ARTICLE_2, TWO_TOWER_RETRIEVAL_SOURCE, 4, 1.2),
             CandidateRecord(
                 CUSTOMER_ID,
@@ -76,7 +84,11 @@ def test_aggregate_candidate_features_combines_sources_and_labels() -> None:
     assert article_2.has_co_visitation
     assert article_2.co_visitation_score == 3.0
     assert article_2.has_content_similarity
-    assert article_2.content_similarity_score == 0.8
+    assert article_2.content_similarity_rank == 2
+    assert article_2.content_similarity_score == 0.95
+    assert article_2.has_item2vec_similarity
+    assert article_2.item2vec_similarity_rank == 2
+    assert article_2.item2vec_similarity_score == 0.95
     assert article_2.has_two_tower_retrieval
     assert article_2.two_tower_retrieval_score == 1.2
     assert article_2.two_tower_retrieval_rank == 4
@@ -232,7 +244,10 @@ def test_deterministic_ranker_scores_product_code_popularity() -> None:
         garment_group_popularity_score_weight=0.0,
     )
 
-    assert score_candidate(product_code_features, weights) > score_candidate(other_features, weights)
+    assert score_candidate(product_code_features, weights) > score_candidate(
+        other_features,
+        weights,
+    )
 
 
 def test_evaluate_deterministic_ranker_from_csv_reports_same_scope_delta(tmp_path: Path) -> None:
@@ -301,3 +316,171 @@ def write_candidate_csv(path: Path, rows: list[tuple[str, str, str, int, float]]
         writer = csv.writer(handle)
         writer.writerow(CANDIDATE_EXPORT_HEADER)
         writer.writerows(rows)
+
+
+def test_iter_candidate_records_accepts_both_optional_columns(tmp_path: Path) -> None:
+    """Reader must accept canonical + ``two_tower_score`` + ``content_user_cosine``.
+
+    Guards the schema seam between
+    ``score-two-tower-candidates`` + ``score-content-similarity-candidates``
+    (which can both write to the same CSV) and downstream rankers.
+    """
+
+    from hm_recsys.ranking.deterministic import iter_candidate_records_from_csv
+    from hm_recsys.retrieval.candidate_export import (
+        CONTENT_USER_COSINE_COLUMN,
+        TWO_TOWER_SCORE_COLUMN,
+    )
+
+    candidate_path = tmp_path / "both.csv"
+    with candidate_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            (
+                *CANDIDATE_EXPORT_HEADER,
+                TWO_TOWER_SCORE_COLUMN,
+                CONTENT_USER_COSINE_COLUMN,
+            )
+        )
+        writer.writerow((CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0, 0.42, 0.91))
+
+    [record] = list(iter_candidate_records_from_csv(candidate_path))
+    assert record.two_tower_score == pytest.approx(0.42)
+    assert record.content_user_cosine == pytest.approx(0.91)
+
+
+def test_iter_candidate_records_accepts_only_content_user_cosine(tmp_path: Path) -> None:
+    """``content_user_cosine`` alone (without two_tower_score) is valid."""
+
+    from hm_recsys.ranking.deterministic import iter_candidate_records_from_csv
+    from hm_recsys.retrieval.candidate_export import CONTENT_USER_COSINE_COLUMN
+
+    candidate_path = tmp_path / "content_only.csv"
+    with candidate_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow((*CANDIDATE_EXPORT_HEADER, CONTENT_USER_COSINE_COLUMN))
+        writer.writerow((CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0, 0.5))
+
+    [record] = list(iter_candidate_records_from_csv(candidate_path))
+    assert record.two_tower_score == 0.0
+    assert record.content_user_cosine == pytest.approx(0.5)
+
+
+def test_iter_candidate_records_rejects_optional_columns_out_of_order(
+    tmp_path: Path,
+) -> None:
+    """Optional columns MUST be in the canonical order to prevent ambiguity."""
+
+    from hm_recsys.ranking.deterministic import iter_candidate_records_from_csv
+    from hm_recsys.retrieval.candidate_export import (
+        CONTENT_USER_COSINE_COLUMN,
+        TWO_TOWER_SCORE_COLUMN,
+    )
+
+    candidate_path = tmp_path / "wrong_order.csv"
+    with candidate_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        # Wrong order: content_user_cosine BEFORE two_tower_score.
+        writer.writerow(
+            (*CANDIDATE_EXPORT_HEADER, CONTENT_USER_COSINE_COLUMN, TWO_TOWER_SCORE_COLUMN)
+        )
+        writer.writerow((CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0, 0.5, 0.6))
+
+    with pytest.raises(ValueError, match="unknown or out-of-order column"):
+        list(iter_candidate_records_from_csv(candidate_path))
+
+
+def test_iter_candidate_records_accepts_augmented_two_tower_score_column(
+    tmp_path: Path,
+) -> None:
+    """Reader must accept the canonical header + ``two_tower_score`` sidecar.
+
+    This is the seam between ``score-two-tower-candidates`` and any
+    downstream ranker (deterministic, LightGBM, ensemble). If the
+    augmented header is rejected, the entire two-tower-as-feature
+    pipeline breaks silently the moment a real scored CSV reaches a
+    ranker.
+    """
+
+    from hm_recsys.ranking.deterministic import iter_candidate_records_from_csv
+    from hm_recsys.retrieval.candidate_export import TWO_TOWER_SCORE_COLUMN
+
+    candidate_path = tmp_path / "augmented.csv"
+    with candidate_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow((*CANDIDATE_EXPORT_HEADER, TWO_TOWER_SCORE_COLUMN))
+        writer.writerow((CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0, 0.42))
+        writer.writerow((CUSTOMER_ID, ARTICLE_2, RECENT_POPULARITY_SOURCE, 1, 1.0, -0.10))
+
+    records = list(iter_candidate_records_from_csv(candidate_path))
+    assert len(records) == 2
+    assert records[0].two_tower_score == pytest.approx(0.42)
+    assert records[1].two_tower_score == pytest.approx(-0.10)
+
+
+def test_iter_candidate_records_defaults_two_tower_score_when_canonical_header(
+    tmp_path: Path,
+) -> None:
+    """Canonical header must produce records with zero ``two_tower_score``.
+
+    Guards backwards compatibility: all existing candidate CSVs on disk
+    have the canonical 5-column header, and they must keep yielding
+    valid records without surprise non-zero defaults.
+    """
+
+    from hm_recsys.ranking.deterministic import iter_candidate_records_from_csv
+
+    candidate_path = tmp_path / "canonical.csv"
+    write_candidate_csv(
+        candidate_path,
+        [(CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0)],
+    )
+
+    records = list(iter_candidate_records_from_csv(candidate_path))
+    assert len(records) == 1
+    assert records[0].two_tower_score == 0.0
+
+
+def test_iter_candidate_records_rejects_unknown_header_columns(tmp_path: Path) -> None:
+    """Unknown trailing columns are rejected loudly to prevent schema drift.
+
+    Only ``two_tower_score`` is an accepted optional column today; any
+    other extra column likely indicates a writer/reader version mismatch
+    and would silently corrupt feature vectors if accepted.
+    """
+
+    from hm_recsys.ranking.deterministic import iter_candidate_records_from_csv
+
+    candidate_path = tmp_path / "stray.csv"
+    with candidate_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow((*CANDIDATE_EXPORT_HEADER, "stray_extra_column"))
+        writer.writerow((CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0, "x"))
+
+    with pytest.raises(ValueError, match="candidate CSV header"):
+        list(iter_candidate_records_from_csv(candidate_path))
+
+
+def test_update_from_record_propagates_two_tower_score_to_features() -> None:
+    """Aggregation must surface the pair-level ``two_tower_score`` on features.
+
+    This is the contract that downstream LightGBM feature-vector builders
+    rely on: after aggregating all source rows for a (customer, article)
+    pair, ``CandidateFeatures.two_tower_score`` must equal the maximum
+    seen across source rows (which, by design, is the single shared
+    pair-level value).
+    """
+
+    feature = CandidateFeatures(customer_id=CUSTOMER_ID, article_id=ARTICLE_1)
+    feature.update_from_record(
+        CandidateRecord(
+            CUSTOMER_ID, ARTICLE_1, REPEAT_SOURCE, 1, 1.0, two_tower_score=0.7
+        )
+    )
+    feature.update_from_record(
+        CandidateRecord(
+            CUSTOMER_ID, ARTICLE_1, RECENT_POPULARITY_SOURCE, 1, 0.5,
+            two_tower_score=0.7,  # pair-level, identical
+        )
+    )
+    assert feature.two_tower_score == pytest.approx(0.7)
