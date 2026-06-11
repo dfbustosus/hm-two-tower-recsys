@@ -80,6 +80,7 @@ from hm_recsys.ranking.deterministic_tuning import (
     write_deterministic_ranker_tuning_report,
 )
 from hm_recsys.ranking.lightgbm_behavioral import (
+    LIGHTGBM_BEHAVIORAL_RANKER_PRIOR_WEIGHTS,
     LightGBMBehavioralRankerConfig,
     LightGBMBehavioralTrainingWindow,
     evaluate_lightgbm_behavioral_ranker_from_csv,
@@ -4611,26 +4612,7 @@ def _lightgbm_behavioral_ranker_weights_from_args(
     the prior itself is not selected on the evaluation labels.
     """
 
-    weights = replace(
-        DEFAULT_DETERMINISTIC_RANKER_WEIGHTS,
-        repeat_presence_weight=3.0,
-        repeat_score_weight=1.0,
-        recent_popularity_presence_weight=0.0,
-        age_segment_popularity_presence_weight=0.45,
-        age_segment_popularity_score_weight=0.1,
-        garment_group_popularity_presence_weight=0.8,
-        garment_group_popularity_score_weight=0.55,
-        co_visitation_presence_weight=1.0,
-        co_visitation_score_weight=0.0,
-        source_count_weight=0.15,
-        best_rank_score_weight=0.0,
-        two_tower_retrieval_presence_weight=1.5,
-        two_tower_retrieval_score_weight=0.0,
-        two_tower_retrieval_rank_weight=0.0,
-        two_tower_retrieval_latest_customer_presence_weight=1.0,
-        two_tower_retrieval_latest_customer_score_weight=0.0,
-        two_tower_retrieval_latest_customer_rank_weight=1.0,
-    )
+    weights = LIGHTGBM_BEHAVIORAL_RANKER_PRIOR_WEIGHTS
     updates: dict[str, float] = {}
     two_tower_presence_weight = getattr(args, "two_tower_ranker_presence_weight", None)
     if two_tower_presence_weight is not None:
