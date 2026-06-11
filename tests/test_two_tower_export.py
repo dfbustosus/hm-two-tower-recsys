@@ -1,329 +1,130 @@
-import csv
-from datetime import date
+"""Tests for the two-tower embedding export and ANN index builders."""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 from hm_recsys.data.io import TransactionEvent
-from hm_recsys.evaluation.temporal import TemporalSplit
-from hm_recsys.training.two_tower_export import (
-    TWO_TOWER_ARTICLE_MAPPING_HEADER,
-    TWO_TOWER_CUSTOMER_MAPPING_HEADER,
-    TWO_TOWER_EXAMPLE_HEADER,
-    TwoTowerExampleExportConfig,
-    write_two_tower_example_export,
-    write_two_tower_example_export_summary,
+from hm_recsys.models.two_tower import (
+    ArticleTowerConfig,
+    CustomerTowerConfig,
+    TwoTowerConfig,
+    TwoTowerTrainingConfig,
+    build_torch_two_tower,
+)
+from hm_recsys.models.two_tower_dataset import (
+    TwoTowerVocabulary,
+    build_id_mappers_from_transactions,
+)
+from hm_recsys.models.two_tower_export import (
+    build_exact_article_index,
+    export_two_tower_embeddings,
+    load_id_mapping,
+    load_two_tower_embeddings,
 )
 
-CUSTOMER_ID = "a" * 64
-SECOND_CUSTOMER_ID = "b" * 64
-THIRD_CUSTOMER_ID = "c" * 64
-VALIDATION_CUSTOMER_ID = "d" * 64
-ARTICLE_1 = "0000000001"
-ARTICLE_2 = "0000000002"
-ARTICLE_3 = "0000000003"
-ARTICLE_4 = "0000000004"
-ARTICLE_5 = "0000000005"
-VALIDATION_ONLY_ARTICLE = "0000000009"
+torch = pytest.importorskip("torch")
+pytest.importorskip("numpy")
 
 
-def test_two_tower_export_is_cutoff_safe_and_preserves_mapping_integrity(
-    tmp_path: Path,
-) -> None:
+def _customer(seed: str) -> str:
+    return seed * 64
+
+
+def _article(seed: int) -> str:
+    return f"{seed:010d}"
+
+
+def _toy_vocab() -> TwoTowerVocabulary:
+    cutoff = date(2020, 9, 16)
     events = [
-        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 2), CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 3), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 4), SECOND_CUSTOMER_ID, ARTICLE_3),
-        TransactionEvent(date(2020, 1, 5), THIRD_CUSTOMER_ID, ARTICLE_4),
-        TransactionEvent(date(2020, 1, 6), THIRD_CUSTOMER_ID, ARTICLE_5),
-        TransactionEvent(date(2020, 1, 8), VALIDATION_CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
-    ]
-    paths = export_paths(tmp_path)
-
-    summary = write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-08"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(
-            negatives_per_positive=1,
-            seed=7,
-            max_positive_examples=2,
-        ),
-    )
-
-    examples = read_dict_rows(paths["examples"])
-    customers = read_rows(paths["customers"])
-    articles = read_rows(paths["articles"])
-
-    assert tuple(examples[0]) == TWO_TOWER_EXAMPLE_HEADER
-    assert tuple(customers[0]) == TWO_TOWER_CUSTOMER_MAPPING_HEADER
-    assert tuple(articles[0]) == TWO_TOWER_ARTICLE_MAPPING_HEADER
-    assert VALIDATION_ONLY_ARTICLE not in {row[1] for row in articles[1:]}
-    assert VALIDATION_CUSTOMER_ID not in {row[1] for row in customers[1:]}
-    assert summary.train_rows_seen == 6
-    assert summary.positive_examples_written == 2
-    assert summary.negative_examples_written == 2
-    assert summary.rows_written == 4
-    assert summary.unique_customers == 1
-    assert summary.unique_articles == 5
-
-    positive_rows = [row for row in examples if row["label"] == "1"]
-    negative_rows = [row for row in examples if row["label"] == "0"]
-
-    assert {row["article_id"] for row in positive_rows} == {ARTICLE_1, ARTICLE_2}
-    assert {row["positive_count"] for row in positive_rows if row["article_id"] == ARTICLE_1} == {
-        "2"
-    }
-    assert {row["anchor_t_dat"] for row in positive_rows if row["article_id"] == ARTICLE_1} == {
-        "2020-01-03"
-    }
-    assert all(row["article_id"] not in {ARTICLE_1, ARTICLE_2} for row in negative_rows)
-    assert all(row["example_type"] == "random_negative" for row in negative_rows)
-    assert_mapping_indices_exist(examples, customers, articles)
-
-
-def test_two_tower_export_is_deterministic_for_same_seed(tmp_path: Path) -> None:
-    events = [
-        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 2), SECOND_CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 3), THIRD_CUSTOMER_ID, ARTICLE_3),
-        TransactionEvent(date(2020, 1, 4), THIRD_CUSTOMER_ID, ARTICLE_4),
-    ]
-    first_paths = export_paths(tmp_path / "first")
-    second_paths = export_paths(tmp_path / "second")
-    config = TwoTowerExampleExportConfig(negatives_per_positive=2, seed=42)
-
-    write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-05"),
-        examples_path=first_paths["examples"],
-        customer_mapping_path=first_paths["customers"],
-        article_mapping_path=first_paths["articles"],
-        config=config,
-    )
-    write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-05"),
-        examples_path=second_paths["examples"],
-        customer_mapping_path=second_paths["customers"],
-        article_mapping_path=second_paths["articles"],
-        config=config,
-    )
-
-    assert first_paths["examples"].read_text(encoding="utf-8") == second_paths[
-        "examples"
-    ].read_text(encoding="utf-8")
-    assert first_paths["customers"].read_text(encoding="utf-8") == second_paths[
-        "customers"
-    ].read_text(encoding="utf-8")
-    assert first_paths["articles"].read_text(encoding="utf-8") == second_paths[
-        "articles"
-    ].read_text(encoding="utf-8")
-
-
-def test_two_tower_export_can_select_latest_positive_pairs(tmp_path: Path) -> None:
-    events = [
-        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 2), SECOND_CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 6), THIRD_CUSTOMER_ID, ARTICLE_3),
-        TransactionEvent(date(2020, 1, 7), THIRD_CUSTOMER_ID, ARTICLE_4),
-    ]
-    paths = export_paths(tmp_path)
-
-    summary = write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-08"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(
-            negatives_per_positive=0,
-            max_positive_examples=2,
-            positive_selection="latest",
-        ),
-    )
-
-    positive_rows = [row for row in read_dict_rows(paths["examples"]) if row["label"] == "1"]
-    assert summary.positive_selection == "latest"
-    assert {row["article_id"] for row in positive_rows} == {ARTICLE_3, ARTICLE_4}
-
-
-def test_two_tower_export_can_select_latest_positive_per_customer(tmp_path: Path) -> None:
-    events = [
-        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 5), CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 4), SECOND_CUSTOMER_ID, ARTICLE_3),
-        TransactionEvent(date(2020, 1, 6), THIRD_CUSTOMER_ID, ARTICLE_4),
-    ]
-    paths = export_paths(tmp_path)
-
-    summary = write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-08"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(
-            negatives_per_positive=0,
-            max_positive_examples=2,
-            positive_selection="latest_customer",
-        ),
-    )
-
-    positive_rows = [row for row in read_dict_rows(paths["examples"]) if row["label"] == "1"]
-    assert summary.positive_selection == "latest_customer"
-    assert summary.unique_customers == 2
-    assert {row["customer_id"] for row in positive_rows} == {CUSTOMER_ID, THIRD_CUSTOMER_ID}
-    assert {row["article_id"] for row in positive_rows} == {ARTICLE_2, ARTICLE_4}
-
-
-def test_two_tower_export_reports_skipped_negatives_when_pool_is_empty(tmp_path: Path) -> None:
-    events = [TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1)]
-    paths = export_paths(tmp_path)
-
-    summary = write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-02"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(negatives_per_positive=1),
-    )
-
-    assert summary.positive_examples_written == 1
-    assert summary.negative_examples_written == 0
-    assert summary.customers_without_negative_pool == 1
-    assert summary.skipped_negative_examples == 1
-
-
-def test_two_tower_export_supports_popularity_weighted_negatives(tmp_path: Path) -> None:
-    events = [
-        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 1), SECOND_CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 2), SECOND_CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 3), SECOND_CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 4), THIRD_CUSTOMER_ID, ARTICLE_3),
-        TransactionEvent(date(2020, 1, 8), VALIDATION_CUSTOMER_ID, VALIDATION_ONLY_ARTICLE),
-    ]
-    paths = export_paths(tmp_path)
-
-    summary = write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-08"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(
-            negatives_per_positive=2,
-            seed=42,
-            negative_sampling="popularity",
-            max_positive_examples=1,
-        ),
-    )
-
-    negative_rows = [row for row in read_dict_rows(paths["examples"]) if row["label"] == "0"]
-    assert summary.negative_sampling == "popularity"
-    assert all(row["example_type"] == "popularity_negative" for row in negative_rows)
-    assert all(row["article_id"] != ARTICLE_1 for row in negative_rows)
-    assert VALIDATION_ONLY_ARTICLE not in {row["article_id"] for row in negative_rows}
-
-
-def test_two_tower_export_mixed_negatives_alternate_popularity_and_random(
-    tmp_path: Path,
-) -> None:
-    events = [
-        TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1),
-        TransactionEvent(date(2020, 1, 1), SECOND_CUSTOMER_ID, ARTICLE_2),
-        TransactionEvent(date(2020, 1, 2), THIRD_CUSTOMER_ID, ARTICLE_3),
-    ]
-    paths = export_paths(tmp_path)
-
-    write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-08"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(
-            negatives_per_positive=2,
-            seed=42,
-            negative_sampling="mixed",
-            max_positive_examples=1,
-        ),
-    )
-
-    negative_types = [
-        row["example_type"] for row in read_dict_rows(paths["examples"]) if row["label"] == "0"
-    ]
-    assert negative_types == ["popularity_negative", "random_negative"]
-
-
-def test_two_tower_export_rejects_invalid_config(tmp_path: Path) -> None:
-    paths = export_paths(tmp_path)
-
-    with pytest.raises(ValueError, match="negatives_per_positive"):
-        TwoTowerExampleExportConfig(negatives_per_positive=-1)
-
-    with pytest.raises(ValueError, match="unsupported negative_sampling"):
-        TwoTowerExampleExportConfig(negative_sampling="bad")  # type: ignore[arg-type]
-
-    with pytest.raises(ValueError, match="progress_interval"):
-        write_two_tower_example_export(
-            transaction_iter_factory=lambda: iter(()),
-            split=TemporalSplit.from_isoformat("2020-01-02"),
-            examples_path=paths["examples"],
-            customer_mapping_path=paths["customers"],
-            article_mapping_path=paths["articles"],
-            progress_interval=0,
+        TransactionEvent(
+            date(2020, 9, 1) + timedelta(days=i),
+            _customer(letter),
+            _article(article_seed),
         )
+        for i, (letter, article_seed) in enumerate(
+            [("a", 1), ("b", 2), ("c", 3), ("a", 4), ("b", 5)]
+        )
+    ]
+    return build_id_mappers_from_transactions(events, cutoff)
 
 
-def test_write_two_tower_export_summary(tmp_path: Path) -> None:
-    events = [TransactionEvent(date(2020, 1, 1), CUSTOMER_ID, ARTICLE_1)]
-    paths = export_paths(tmp_path)
-    summary = write_two_tower_example_export(
-        transaction_iter_factory=lambda: iter(events),
-        split=TemporalSplit.from_isoformat("2020-01-02"),
-        examples_path=paths["examples"],
-        customer_mapping_path=paths["customers"],
-        article_mapping_path=paths["articles"],
-        config=TwoTowerExampleExportConfig(negatives_per_positive=0),
+def test_export_two_tower_embeddings_writes_npz_and_tsv(tmp_path: Path) -> None:
+    vocab = _toy_vocab()
+    model = build_torch_two_tower(
+        TwoTowerConfig(
+            customer_tower=CustomerTowerConfig(
+                num_customers=vocab.num_customers,
+                customer_id_embedding_dim=4,
+                hidden_dims=(8,),
+                output_dim=8,
+                dropout=0.0,
+            ),
+            article_tower=ArticleTowerConfig(
+                num_articles=vocab.num_articles,
+                article_id_embedding_dim=4,
+                content_embedding_dim=4,
+                hidden_dims=(8,),
+                output_dim=8,
+                dropout=0.0,
+            ),
+            training=TwoTowerTrainingConfig(temperature=0.1),
+        )
     )
 
-    report_path = write_two_tower_example_export_summary(summary, tmp_path / "report.json")
+    export = export_two_tower_embeddings(model=model, vocabulary=vocab, output_dir=tmp_path)
 
-    assert report_path.exists()
-    assert '"positive_examples_written"' in report_path.read_text(encoding="utf-8")
+    assert export.customer_embeddings_path.exists()
+    assert export.article_embeddings_path.exists()
+    assert export.customer_id_mapping_path.exists()
+    assert export.article_id_mapping_path.exists()
 
+    customer_vectors = load_two_tower_embeddings(export.customer_embeddings_path)
+    article_vectors = load_two_tower_embeddings(export.article_embeddings_path)
+    assert len(customer_vectors) == vocab.num_customers
+    assert len(article_vectors) == vocab.num_articles
+    assert len(customer_vectors[0]) == 8
 
-def export_paths(base: Path) -> dict[str, Path]:
-    base.mkdir(parents=True, exist_ok=True)
-    return {
-        "examples": base / "examples.csv",
-        "customers": base / "customers.csv",
-        "articles": base / "articles.csv",
-    }
-
-
-def read_dict_rows(path: Path) -> list[dict[str, str]]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return list(csv.DictReader(handle))
-
-
-def read_rows(path: Path) -> list[tuple[str, ...]]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        return [tuple(row) for row in csv.reader(handle)]
+    reloaded_mapper = load_id_mapping(export.article_id_mapping_path)
+    assert reloaded_mapper.vocab_size == vocab.num_articles
+    expected_article = vocab.article_mapper.token_for(1)
+    assert reloaded_mapper.token_for(1) == expected_article
 
 
-def assert_mapping_indices_exist(
-    examples: list[dict[str, str]],
-    customers: list[tuple[str, ...]],
-    articles: list[tuple[str, ...]],
-) -> None:
-    customer_indices = {row[0] for row in customers[1:]}
-    article_indices = {row[0] for row in articles[1:]}
-    assert all(row["customer_index"] in customer_indices for row in examples)
-    assert all(row["article_index"] in article_indices for row in examples)
+def test_build_exact_article_index_skips_unknown_token() -> None:
+    vocab = _toy_vocab()
+    # Build a deterministic, small dimensional embedding matrix for clarity.
+    embeddings = [[0.0, 0.0, 0.0]] + [
+        [float(index) / 10.0, float(index) / 5.0, float(index) / 2.0]
+        for index in range(1, vocab.num_articles)
+    ]
+
+    index = build_exact_article_index(
+        article_embeddings=embeddings,
+        article_id_mapper=vocab.article_mapper,
+    )
+
+    assert index.article_count == vocab.num_articles - 1
+    top1 = index.query((1.0, 1.0, 1.0), top_k=1)
+    assert top1
+    assert top1[0].article_id == vocab.article_mapper.token_for(vocab.num_articles - 1)
+
+
+def test_load_id_mapping_rejects_bad_header(tmp_path: Path) -> None:
+    bad_path = tmp_path / "bad.tsv"
+    bad_path.write_text("not_an_index_header\n1\tfoo\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unexpected header"):
+        load_id_mapping(bad_path)
+
+
+def test_load_id_mapping_rejects_non_contiguous(tmp_path: Path) -> None:
+    path = tmp_path / "skip.tsv"
+    path.write_text("index\ttoken\n1\tfoo\n3\tbar\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="non-contiguous"):
+        load_id_mapping(path)
