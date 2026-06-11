@@ -14,13 +14,21 @@ from typing import Any
 
 from hm_recsys.evaluation.metrics import mean_average_precision_at_k, recall_at_k
 from hm_recsys.evaluation.temporal import TemporalSplit
-from hm_recsys.retrieval.candidate_export import CANDIDATE_EXPORT_HEADER, CandidateRecord
+from hm_recsys.retrieval.candidate_export import (
+    CANDIDATE_EXPORT_HEADER,
+    CONTENT_USER_COSINE_COLUMN,
+    KNOWN_AUGMENTED_COLUMNS,
+    TWO_TOWER_SCORE_COLUMN,
+    CandidateRecord,
+)
 from hm_recsys.retrieval.source_names import (
     AGE_SEGMENT_POPULARITY_SOURCE,
     ALL_TIME_POPULARITY_SOURCE,
     CO_VISITATION_SOURCE,
     GARMENT_GROUP_POPULARITY_SOURCE,
     IMAGE_SIMILARITY_SOURCE,
+    ITEM2VEC_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+    ITEM2VEC_SIMILARITY_SOURCE,
     MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     MULTIMODAL_SIMILARITY_SOURCE,
     PRODUCT_CODE_POPULARITY_SOURCE,
@@ -29,6 +37,7 @@ from hm_recsys.retrieval.source_names import (
     RECENT_POPULARITY_SOURCE,
     REPEAT_SOURCE,
     SEASONAL_POPULARITY_SOURCE,
+    TEXT_SIMILARITY_POPULARITY_PRIOR_SOURCE,
     TEXT_SIMILARITY_SOURCE,
     TWO_TOWER_MULTIMODAL_SOURCE,
     TWO_TOWER_RETRIEVAL_LATEST_CUSTOMER_SOURCE,
@@ -44,6 +53,9 @@ CONTENT_SIMILARITY_SOURCES = frozenset(
     {
         IMAGE_SIMILARITY_SOURCE,
         TEXT_SIMILARITY_SOURCE,
+        TEXT_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+        ITEM2VEC_SIMILARITY_SOURCE,
+        ITEM2VEC_SIMILARITY_POPULARITY_PRIOR_SOURCE,
         MULTIMODAL_SIMILARITY_SOURCE,
         MULTIMODAL_SIMILARITY_POPULARITY_PRIOR_SOURCE,
         TWO_TOWER_MULTIMODAL_SOURCE,
@@ -179,6 +191,10 @@ class CandidateFeatures:
         garment_group_popularity_score: Source score from garment-group popularity.
         content_similarity_rank: Optional source rank from cached content similarity.
         content_similarity_score: Source score from cached content similarity.
+        text_similarity_rank: Optional source rank from text-embedding similarity.
+        text_similarity_score: Source score from text-embedding similarity.
+        item2vec_similarity_rank: Optional source rank from Item2Vec similarity.
+        item2vec_similarity_score: Source score from Item2Vec similarity.
         two_tower_retrieval_rank: Optional source rank from two-tower retrieval.
         two_tower_retrieval_score: Source score from two-tower retrieval.
         two_tower_retrieval_latest_customer_rank: Optional source rank from broader
@@ -187,6 +203,14 @@ class CandidateFeatures:
         source_count: Number of candidate sources emitting this pair.
         best_rank: Best one-based source rank across sources.
         max_source_score: Maximum raw source score across sources.
+        two_tower_score: Pair-level two-tower cosine score from the optional
+            ``two_tower_score`` column in augmented candidate CSVs. ``0.0``
+            when the column is absent (canonical schema) or the pair has
+            an unknown index in the two-tower vocabulary.
+        content_user_cosine: Pair-level customer-content / article-content
+            cosine similarity from the optional ``content_user_cosine``
+            column. ``0.0`` for cold-start customers or when the column
+            is absent.
     """
 
     customer_id: str
@@ -214,6 +238,10 @@ class CandidateFeatures:
     product_code_popularity_score: float = 0.0
     content_similarity_rank: int | None = None
     content_similarity_score: float = 0.0
+    text_similarity_rank: int | None = None
+    text_similarity_score: float = 0.0
+    item2vec_similarity_rank: int | None = None
+    item2vec_similarity_score: float = 0.0
     two_tower_retrieval_rank: int | None = None
     two_tower_retrieval_score: float = 0.0
     two_tower_retrieval_latest_customer_rank: int | None = None
@@ -221,6 +249,30 @@ class CandidateFeatures:
     source_count: int = 0
     best_rank: int | None = None
     max_source_score: float = 0.0
+    two_tower_score: float = 0.0
+    """Pair-level two-tower score (cosine similarity) for the candidate.
+
+    Populated from the optional ``two_tower_score`` column in augmented
+    candidate CSVs produced by ``score-two-tower-candidates``. Stays
+    ``0.0`` when the column is absent (canonical schema) OR when the
+    pair has unknown customer/article indices in the two-tower
+    vocabulary. The value is constant across the source-rows of any
+    given ``(customer_id, article_id)`` pair, so :meth:`update_from_record`
+    takes the max defensively rather than overwriting.
+    """
+
+    content_user_cosine: float = 0.0
+    """Pair-level customer-content / article-content cosine similarity.
+
+    Populated from the optional ``content_user_cosine`` column in
+    augmented candidate CSVs produced by
+    ``score-content-similarity-candidates``. The customer-side embedding
+    is the mean of the customer's recent purchased article FashionCLIP
+    vectors; the article-side embedding is the candidate article's
+    FashionCLIP vector. Stays ``0.0`` for cold-start customers (no
+    pre-cutoff purchases) and when the column is absent. Constant across
+    source-rows of any given ``(customer_id, article_id)`` pair.
+    """
 
     def update_from_record(self, record: CandidateRecord) -> None:
         """Update feature fields from one source-specific candidate record.
@@ -236,6 +288,14 @@ class CandidateFeatures:
             else min(self.best_rank, record.source_rank)
         )
         self.max_source_score = max(self.max_source_score, record.source_score)
+        # Pair-level optional features: every source-row for the same
+        # (customer, article) carries the same value. ``max`` is a
+        # defensive aggregator so a future writer emitting per-source
+        # values keeps the strongest signal instead of the last seen.
+        self.two_tower_score = max(self.two_tower_score, record.two_tower_score)
+        self.content_user_cosine = max(
+            self.content_user_cosine, record.content_user_cosine
+        )
         if record.source == REPEAT_SOURCE:
             self.repeat_rank = _min_optional_rank(self.repeat_rank, record.source_rank)
             self.repeat_score = max(self.repeat_score, record.source_score)
@@ -329,6 +389,30 @@ class CandidateFeatures:
                 self.content_similarity_rank, record.source_rank
             )
             self.content_similarity_score = max(self.content_similarity_score, record.source_score)
+            if record.source in {
+                TEXT_SIMILARITY_SOURCE,
+                TEXT_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+            }:
+                self.text_similarity_rank = _min_optional_rank(
+                    self.text_similarity_rank,
+                    record.source_rank,
+                )
+                self.text_similarity_score = max(
+                    self.text_similarity_score,
+                    record.source_score,
+                )
+            elif record.source in {
+                ITEM2VEC_SIMILARITY_SOURCE,
+                ITEM2VEC_SIMILARITY_POPULARITY_PRIOR_SOURCE,
+            }:
+                self.item2vec_similarity_rank = _min_optional_rank(
+                    self.item2vec_similarity_rank,
+                    record.source_rank,
+                )
+                self.item2vec_similarity_score = max(
+                    self.item2vec_similarity_score,
+                    record.source_score,
+                )
 
     @property
     def has_repeat(self) -> bool:
@@ -397,6 +481,18 @@ class CandidateFeatures:
         return self.content_similarity_rank is not None
 
     @property
+    def has_text_similarity(self) -> bool:
+        """Return whether a text-embedding content source emitted this pair."""
+
+        return self.text_similarity_rank is not None
+
+    @property
+    def has_item2vec_similarity(self) -> bool:
+        """Return whether an Item2Vec content source emitted this pair."""
+
+        return self.item2vec_similarity_rank is not None
+
+    @property
     def has_two_tower_retrieval(self) -> bool:
         """Return whether two-tower retrieval emitted this pair."""
 
@@ -457,8 +553,26 @@ class DeterministicRankerReport:
 def iter_candidate_records_from_csv(path: Path | str) -> Iterable[CandidateRecord]:
     """Stream candidate records from a ranker-ready candidate CSV.
 
+    Accepts the canonical 5-column header PLUS any subset of the known
+    optional augmentation columns appended in the order declared by
+    :data:`KNOWN_AUGMENTED_COLUMNS` (currently ``two_tower_score`` then
+    ``content_user_cosine``). Each present optional column is parsed
+    into its matching field on :class:`CandidateRecord`; absent ones
+    default to ``0.0``.
+
+    Examples of accepted headers (in order)::
+
+        customer_id,article_id,source,source_rank,source_score
+        customer_id,article_id,source,source_rank,source_score,two_tower_score
+        customer_id,article_id,source,source_rank,source_score,content_user_cosine
+        customer_id,article_id,source,source_rank,source_score,two_tower_score,content_user_cosine
+
+    Any other column layout (unknown name, wrong order, missing canonical
+    column) is rejected loudly so silent schema drift cannot corrupt
+    training matrices.
+
     Args:
-        path: Candidate CSV path with ``CANDIDATE_EXPORT_HEADER``.
+        path: Candidate CSV path.
 
     Yields:
         Parsed candidate records.
@@ -467,13 +581,44 @@ def iter_candidate_records_from_csv(path: Path | str) -> Iterable[CandidateRecor
         ValueError: If the header or typed fields are invalid.
     """
 
+    canonical = CANDIDATE_EXPORT_HEADER
     candidate_path = Path(path).expanduser().resolve()
     with candidate_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        if tuple(reader.fieldnames or ()) != CANDIDATE_EXPORT_HEADER:
+        actual = tuple(reader.fieldnames or ())
+        if len(actual) < len(canonical) or actual[: len(canonical)] != canonical:
             raise ValueError(
-                f"candidate CSV header must be exactly {','.join(CANDIDATE_EXPORT_HEADER)}"
+                f"candidate CSV header must start with exactly {','.join(canonical)} "
+                f"(optionally followed by any subset of "
+                f"{','.join(KNOWN_AUGMENTED_COLUMNS)} in that order); got "
+                f"{','.join(actual)}"
             )
+        trailing = actual[len(canonical) :]
+        # Validate trailing columns are a subset of the known set in the
+        # canonical order. Reject duplicates or unknown names so the file
+        # cannot be ambiguous.
+        seen: set[str] = set()
+        expected_index = 0
+        for column in trailing:
+            if column in seen:
+                raise ValueError(
+                    f"candidate CSV header has duplicate augmentation column {column!r}: "
+                    f"{','.join(actual)}"
+                )
+            seen.add(column)
+            while (
+                expected_index < len(KNOWN_AUGMENTED_COLUMNS)
+                and KNOWN_AUGMENTED_COLUMNS[expected_index] != column
+            ):
+                expected_index += 1
+            if expected_index >= len(KNOWN_AUGMENTED_COLUMNS):
+                raise ValueError(
+                    f"candidate CSV header has unknown or out-of-order column "
+                    f"{column!r}: {','.join(actual)}"
+                )
+            expected_index += 1
+        has_two_tower_score = TWO_TOWER_SCORE_COLUMN in seen
+        has_content_user_cosine = CONTENT_USER_COSINE_COLUMN in seen
         for line_number, row in enumerate(reader, start=2):
             try:
                 yield CandidateRecord(
@@ -482,6 +627,14 @@ def iter_candidate_records_from_csv(path: Path | str) -> Iterable[CandidateRecor
                     source=row["source"],
                     source_rank=int(row["source_rank"]),
                     source_score=float(row["source_score"]),
+                    two_tower_score=(
+                        float(row[TWO_TOWER_SCORE_COLUMN]) if has_two_tower_score else 0.0
+                    ),
+                    content_user_cosine=(
+                        float(row[CONTENT_USER_COSINE_COLUMN])
+                        if has_content_user_cosine
+                        else 0.0
+                    ),
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(f"line {line_number}: invalid candidate row") from exc
