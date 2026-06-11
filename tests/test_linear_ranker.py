@@ -77,6 +77,10 @@ def test_feature_vector_matches_schema() -> None:
         product_code_popularity_score=0.55,
         content_similarity_rank=1,
         content_similarity_score=0.8,
+        text_similarity_rank=2,
+        text_similarity_score=0.7,
+        item2vec_similarity_rank=3,
+        item2vec_similarity_score=0.6,
         two_tower_retrieval_rank=5,
         two_tower_retrieval_score=1.2,
         two_tower_retrieval_latest_customer_rank=6,
@@ -112,6 +116,16 @@ def test_feature_vector_matches_schema() -> None:
     ] == pytest.approx(1.0 / 3)
     assert vector[LINEAR_FEATURE_NAMES.index("has_content_similarity")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("content_similarity_score")] == pytest.approx(0.8)
+    assert vector[LINEAR_FEATURE_NAMES.index("has_text_similarity")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("text_similarity_score")] == pytest.approx(0.7)
+    assert vector[LINEAR_FEATURE_NAMES.index("text_similarity_rank_reciprocal")] == pytest.approx(
+        0.5
+    )
+    assert vector[LINEAR_FEATURE_NAMES.index("has_item2vec_similarity")] == 1.0
+    assert vector[LINEAR_FEATURE_NAMES.index("item2vec_similarity_score")] == pytest.approx(0.6)
+    assert vector[
+        LINEAR_FEATURE_NAMES.index("item2vec_similarity_rank_reciprocal")
+    ] == pytest.approx(1.0 / 3)
     assert vector[LINEAR_FEATURE_NAMES.index("has_two_tower_retrieval")] == 1.0
     assert vector[LINEAR_FEATURE_NAMES.index("two_tower_retrieval_score")] == pytest.approx(1.2)
     assert vector[LINEAR_FEATURE_NAMES.index("has_two_tower_retrieval_latest_customer")] == 1.0
